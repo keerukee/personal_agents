@@ -1,0 +1,159 @@
+@page "/trigger"
+@rendermode InteractiveServer
+@inject HttpClient Http
+
+<PageTitle>Trigger Event - Agent Dashboard</PageTitle>
+
+<div class="mb-4">
+    <h2 class="fw-bold mb-1"><i class="bi bi-play-circle-fill text-success me-2"></i>Trigger Event / Test Prompt</h2>
+    <p class="text-muted mb-0">Dispatch a generic prompt to Central Orchestrator to test dynamic LLM routing & execution.</p>
+</div>
+
+<div class="row">
+    <div class="col-lg-6 mb-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body">
+                <h5 class="fw-bold mb-3">Submit Prompt</h5>
+                
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Event Source</label>
+                    <input type="text" class="form-control" @bind="eventSource" placeholder="BlazorDashboardUser" />
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">User Prompt / Instructions</label>
+                    <textarea class="form-control" rows="4" @bind="promptText" placeholder="e.g. Please run sales database query for July 2026 and extract data"></textarea>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label fw-semibold">Extra JSON Payload (Optional)</label>
+                    <textarea class="form-control font-monospace fs-7" rows="3" @bind="jsonData" placeholder='{"subject": "Q3 Sales Analysis"}'></textarea>
+                </div>
+
+                <button class="btn btn-success w-100 py-2 d-flex align-items-center justify-content-center gap-2" @onclick="SubmitEvent" disabled="@isSubmitting">
+                    @if (isSubmitting)
+                    {
+                        <span class="spinner-border spinner-border-sm" role="status"></span>
+                        <span>Planning & Executing DAG...</span>
+                    }
+                    else
+                    {
+                        <i class="bi bi-send-fill"></i>
+                        <span>Dispatch to Central Orchestrator</span>
+                    }
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-6 mb-4">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-header bg-white py-3">
+                <h5 class="fw-bold mb-0">Orchestrator Execution Plan Output</h5>
+            </div>
+            <div class="card-body">
+                @if (executionResult == null)
+                {
+                    <div class="text-center py-5 text-muted">
+                        <i class="bi bi-cpu display-4 d-block mb-2"></i>
+                        <span>Submit a prompt to view the generated DAG execution plan.</span>
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-success d-flex justify-content-between align-items-center">
+                        <div>
+                            <strong>Status:</strong> @executionResult.Status<br />
+                            <small>Plan ID: <code>@executionResult.PlanId</code></small>
+                        </div>
+                        <span class="badge bg-success fs-6">@executionResult.Steps.Count Steps</span>
+                    </div>
+
+                    <h6 class="fw-bold mb-2">Executed Steps:</h6>
+                    <div class="list-group">
+                        @foreach (var step in executionResult.Steps)
+                        {
+                            <div class="list-group-item p-3 mb-2 rounded border-start border-4 @GetStepBorderClass(step.Status)">
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="fw-bold">Step #@step.StepId: <code>@step.Action</code></span>
+                                    <span class="badge @(step.Status == "Completed" ? "bg-success" : "bg-warning")">@step.Status</span>
+                                </div>
+                                <small class="text-muted d-block mb-1">Target Agent: <strong>@step.AgentId</strong></small>
+                                <div class="bg-light p-2 rounded fs-7 font-monospace text-wrap">
+                                    <strong>Output:</strong> @(step.ResultOutput ?? "N/A")
+                                </div>
+                            </div>
+                        }
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string eventSource = "BlazorDashboardUser";
+    private string promptText = "Please run sales database query for July 2026 and format tabular report";
+    private string jsonData = "{\"subject\": \"Sales Query Request\"}";
+    private bool isSubmitting = false;
+    private PlanResultResponse? executionResult;
+
+    private async Task SubmitEvent()
+    {
+        if (string.IsNullOrWhiteSpace(promptText)) return;
+
+        isSubmitting = true;
+        executionResult = null;
+
+        try
+        {
+            System.Text.Json.JsonElement parsedData;
+            try
+            {
+                parsedData = System.Text.Json.JsonDocument.Parse(jsonData).RootElement;
+            }
+            catch
+            {
+                parsedData = System.Text.Json.JsonDocument.Parse("{}").RootElement;
+            }
+
+            var eventMsg = new AgentEventMessage(
+                EventId: $"evt_{Guid.NewGuid():N}"[..12],
+                Source: eventSource,
+                Timestamp: DateTimeOffset.UtcNow,
+                Prompt: promptText,
+                Data: parsedData
+            );
+
+            var res = await Http.PostAsJsonAsync("api/events/inbound", eventMsg);
+            if (res.IsSuccessStatusCode)
+            {
+                executionResult = await res.Content.ReadFromJsonAsync<PlanResultResponse>();
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error submitting event: {ex.Message}");
+        }
+        finally
+        {
+            isSubmitting = false;
+        }
+    }
+
+    private static string GetStepBorderClass(string status) => status switch
+    {
+        "Completed" => "border-success",
+        "Failed" => "border-danger",
+        _ => "border-warning"
+    };
+
+    private class PlanResultResponse
+    {
+        public string Message { get; set; } = string.Empty;
+        public string EventId { get; set; } = string.Empty;
+        public string PlanId { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public List<TaskStep> Steps { get; set; } = new();
+    }
+}

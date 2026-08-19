@@ -1,0 +1,227 @@
+@page "/"
+@page "/tasks"
+@rendermode InteractiveServer
+@inject HttpClient Http
+
+<PageTitle>Human Action Items - Agent Dashboard</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="bi bi-list-task text-warning me-2"></i>Human Action Tasks</h2>
+        <p class="text-muted mb-0">Tasks logged by Central Orchestrator requiring your action or review.</p>
+    </div>
+    <button class="btn btn-primary d-flex align-items-center gap-2" @onclick="OpenNewTaskModal">
+        <i class="bi bi-plus-circle"></i> Log New Task
+    </button>
+</div>
+
+<!-- Status Filter Pills -->
+<div class="mb-4 d-flex gap-2">
+    <button class="btn btn-sm @(selectedStatus == null ? "btn-dark" : "btn-outline-dark")" @onclick='() => FilterByStatus(null)'>All Tasks</button>
+    <button class="btn btn-sm @(selectedStatus == "PendingHumanAction" ? "btn-warning" : "btn-outline-warning")" @onclick='() => FilterByStatus("PendingHumanAction")'>Action Required</button>
+    <button class="btn btn-sm @(selectedStatus == "InReview" ? "btn-info" : "btn-outline-info")" @onclick='() => FilterByStatus("InReview")'>In Review</button>
+    <button class="btn btn-sm @(selectedStatus == "Completed" ? "btn-success" : "btn-outline-success")" @onclick='() => FilterByStatus("Completed")'>Completed</button>
+</div>
+
+@if (isLoading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-primary" role="status"></div>
+        <p class="mt-2 text-muted">Loading tasks from Central Orchestrator...</p>
+    </div>
+}
+else if (tasks == null || tasks.Count == 0)
+{
+    <div class="card p-5 text-center bg-white border-0 shadow-sm">
+        <i class="bi bi-check2-circle text-success display-3 mb-3"></i>
+        <h5 class="fw-bold">No tasks found</h5>
+        <p class="text-muted mb-0">You're all caught up! No pending human action items.</p>
+    </div>
+}
+else
+{
+    <div class="row g-3">
+        @foreach (var task in tasks)
+        {
+            <div class="col-md-6 col-lg-4">
+                <div class="card h-100 border-0 shadow-sm">
+                    <div class="card-body d-flex flex-column">
+                        <div class="d-flex justify-content-between align-items-start mb-2">
+                            <span class="badge @GetStatusBadgeClass(task.Status)">@task.Status</span>
+                            <span class="badge @GetPriorityBadgeClass(task.Priority)">@task.Priority</span>
+                        </div>
+                        <h5 class="card-title fw-bold text-dark mb-2">@task.Title</h5>
+                        <p class="card-text text-secondary flex-grow-1">@task.Description</p>
+                        
+                        <div class="border-top pt-3 mt-3 fs-7 text-muted">
+                            <div class="d-flex justify-content-between mb-1">
+                                <span><i class="bi bi-hash"></i> Event: <code>@task.EventId</code></span>
+                                <span><i class="bi bi-clock"></i> @task.CreatedAt.ToString("MMM dd HH:mm")</span>
+                            </div>
+                            @if (!string.IsNullOrEmpty(task.AssignedAgentId))
+                            {
+                                <div><i class="bi bi-robot"></i> Source Agent: <strong>@task.AssignedAgentId</strong></div>
+                            }
+                        </div>
+
+                        <div class="mt-3 d-flex gap-2">
+                            @if (task.Status != "Completed")
+                            {
+                                <button class="btn btn-sm btn-success flex-grow-1" @onclick='() => UpdateStatus(task.Id, "Completed")'>
+                                    <i class="bi bi-check-lg"></i> Complete
+                                </button>
+                                <button class="btn btn-sm btn-outline-info" @onclick='() => UpdateStatus(task.Id, "InReview")'>
+                                    Review
+                                </button>
+                            }
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeleteTask(task.Id)">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- New Task Modal -->
+@if (showNewTaskModal)
+{
+    <div class="modal fade show d-block" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-plus-circle me-2"></i>Log Human Action Task</h5>
+                    <button type="button" class="btn-close" @onclick="CloseModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Task Title</label>
+                        <input type="text" class="form-control" @bind="newTask.Title" placeholder="e.g. Approve Q3 Sales Summary" />
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Description</label>
+                        <textarea class="form-control" rows="3" @bind="newTask.Description" placeholder="Detailed action required..."></textarea>
+                    </div>
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-semibold">Priority</label>
+                            <select class="form-select" @bind="newTask.Priority">
+                                <option value="High">High</option>
+                                <option value="Medium">Medium</option>
+                                <option value="Low">Low</option>
+                            </select>
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-semibold">Event ID</label>
+                            <input type="text" class="form-control" @bind="newTask.EventId" placeholder="evt_1001" />
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseModal">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SubmitNewTask">Create Task</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<HumanTaskDto>? tasks;
+    private bool isLoading = true;
+    private string? selectedStatus;
+    private bool showNewTaskModal = false;
+    private NewTaskForm newTask = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadTasks();
+    }
+
+    private async Task LoadTasks()
+    {
+        isLoading = true;
+        try
+        {
+            var url = string.IsNullOrEmpty(selectedStatus) ? "api/tasks" : $"api/tasks?status={selectedStatus}";
+            tasks = await Http.GetFromJsonAsync<List<HumanTaskDto>>(url);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading tasks: {ex.Message}");
+            tasks = new List<HumanTaskDto>();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task FilterByStatus(string? status)
+    {
+        selectedStatus = status;
+        await LoadTasks();
+    }
+
+    private async Task UpdateStatus(int id, string newStatus)
+    {
+        await Http.PutAsJsonAsync($"api/tasks/{id}/status", new UpdateTaskStatusRequest(newStatus));
+        await LoadTasks();
+    }
+
+    private async Task DeleteTask(int id)
+    {
+        await Http.DeleteAsync($"api/tasks/{id}");
+        await LoadTasks();
+    }
+
+    private void OpenNewTaskModal()
+    {
+        newTask = new NewTaskForm { EventId = $"manual_{Guid.NewGuid():N}"[..12] };
+        showNewTaskModal = true;
+    }
+
+    private void CloseModal() => showNewTaskModal = false;
+
+    private async Task SubmitNewTask()
+    {
+        if (string.IsNullOrWhiteSpace(newTask.Title)) return;
+
+        var req = new CreateHumanTaskRequest(
+            EventId: newTask.EventId,
+            Title: newTask.Title,
+            Description: newTask.Description,
+            AssignedAgentId: null,
+            Priority: newTask.Priority
+        );
+
+        await Http.PostAsJsonAsync("api/tasks", req);
+        showNewTaskModal = false;
+        await LoadTasks();
+    }
+
+    private static string GetStatusBadgeClass(string status) => status switch
+    {
+        "PendingHumanAction" => "bg-warning text-dark",
+        "InReview" => "bg-info text-dark",
+        "Completed" => "bg-success",
+        _ => "bg-secondary"
+    };
+
+    private static string GetPriorityBadgeClass(string priority) => priority switch
+    {
+        "High" => "bg-danger",
+        "Medium" => "bg-primary",
+        _ => "bg-secondary"
+    };
+
+    private class NewTaskForm
+    {
+        public string EventId { get; set; } = string.Empty;
+        public string Title { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string Priority { get; set; } = "Medium";
+    }
+}

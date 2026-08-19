@@ -1,0 +1,11 @@
+@inherits LayoutComponentBase
+
+<div class="page d-flex">
+    <div class="sidebar bg-dark" style="width: 280px; min-height: 100vh;">
+        <NavMenu />
+    </div>
+
+    <main class="flex-grow-1 bg-light p-4">
+        @Body
+    </main>
+</div>

@@ -1,0 +1,256 @@
+@page "/agents"
+@rendermode InteractiveServer
+@inject HttpClient Http
+
+<PageTitle>Dynamic Agent Registry - Agent Dashboard</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h2 class="fw-bold mb-1"><i class="bi bi-robot text-info me-2"></i>Dynamic Agent Registry</h2>
+        <p class="text-muted mb-0">Register, manage, and inspect sub-agents and capabilities dynamically at runtime.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" @onclick="SeedDefaultAgents">
+            <i class="bi bi-arrow-clockwise"></i> Reset / Seed Defaults
+        </button>
+        <button class="btn btn-primary d-flex align-items-center gap-2" @onclick="OpenAddAgentModal">
+            <i class="bi bi-plus-circle"></i> Add New Agent
+        </button>
+    </div>
+</div>
+
+@if (isLoading)
+{
+    <div class="text-center my-5">
+        <div class="spinner-border text-info" role="status"></div>
+        <p class="mt-2 text-muted">Loading registered agents from SQL Server DB...</p>
+    </div>
+}
+else if (agents == null || agents.Count == 0)
+{
+    <div class="card p-5 text-center bg-white border-0 shadow-sm">
+        <i class="bi bi-exclamation-triangle text-warning display-3 mb-3"></i>
+        <h5 class="fw-bold">No Agents Registered</h5>
+        <p class="text-muted">Click "Add New Agent" or "Reset / Seed Defaults" to add agents to the registry database.</p>
+    </div>
+}
+else
+{
+    <div class="row g-4">
+        @foreach (var agent in agents)
+        {
+            <div class="col-12 col-xl-6">
+                <div class="card border-0 shadow-sm h-100">
+                    <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                        <div class="d-flex align-items-center gap-2">
+                            <span class="badge @(agent.IsActive ? "bg-success" : "bg-danger")">
+                                @(agent.IsActive ? "Active" : "Inactive")
+                            </span>
+                            <h5 class="fw-bold mb-0">@agent.Name</h5>
+                            <small class="text-muted">(@agent.Id)</small>
+                        </div>
+                        <span class="badge bg-light text-dark border">@agent.TransportType</span>
+                    </div>
+
+                    <div class="card-body">
+                        <p class="card-text text-secondary mb-3">@agent.Description</p>
+                        
+                        <div class="mb-3 p-2 bg-light rounded text-break fs-7 font-monospace">
+                            <i class="bi bi-link-45deg"></i> <strong>Endpoint:</strong> @agent.EndpointUrl
+                        </div>
+
+                        <h6 class="fw-bold mb-2 fs-7 text-uppercase text-muted">Agent Capabilities (@agent.Capabilities.Count)</h6>
+                        <div class="list-group list-group-flush border rounded mb-3">
+                            @foreach (var cap in agent.Capabilities)
+                            {
+                                <div class="list-group-item bg-white p-2">
+                                    <div class="d-flex justify-content-between align-items-center">
+                                        <code class="fw-bold text-primary">@cap.CapabilityName</code>
+                                    </div>
+                                    <small class="text-muted d-block">@cap.Description</small>
+                                </div>
+                            }
+                        </div>
+                    </div>
+
+                    <div class="card-footer bg-white py-2 d-flex justify-content-between align-items-center">
+                        <small class="text-muted"><i class="bi bi-heartbeat"></i> Heartbeat: @agent.LastHeartbeat.ToString("g")</small>
+                        @if (agent.IsActive)
+                        {
+                            <button class="btn btn-sm btn-outline-danger" @onclick="() => DeactivateAgent(agent.Id)">
+                                Deactivate
+                            </button>
+                        }
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+}
+
+<!-- Add Agent Modal -->
+@if (showAddModal)
+{
+    <div class="modal fade show d-block" style="background-color: rgba(0,0,0,0.5);">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title fw-bold"><i class="bi bi-plus-circle me-2"></i>Register New Sub-Agent</h5>
+                    <button type="button" class="btn-close" @onclick="CloseAddModal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-semibold">Agent Unique ID</label>
+                            <input type="text" class="form-control" @bind="newAgent.Id" placeholder="e.g. sql-data-agent" />
+                        </div>
+                        <div class="col-6 mb-3">
+                            <label class="form-label fw-semibold">Agent Name</label>
+                            <input type="text" class="form-control" @bind="newAgent.Name" placeholder="e.g. SqlDataAgent" />
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Agent Description (Used by LLM for Routing)</label>
+                        <textarea class="form-control" rows="2" @bind="newAgent.Description" placeholder="Executes queries against data warehouse..."></textarea>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-8 mb-3">
+                            <label class="form-label fw-semibold">Endpoint URL</label>
+                            <input type="text" class="form-control" @bind="newAgent.EndpointUrl" placeholder="http://localhost:5001/mcp" />
+                        </div>
+                        <div class="col-4 mb-3">
+                            <label class="form-label fw-semibold">Transport Protocol</label>
+                            <select class="form-select" @bind="newAgent.TransportType">
+                                <option value="StreamableHttpMcp">StreamableHttpMcp</option>
+                                <option value="PythonFastApi">PythonFastApi</option>
+                                <option value="RestApi">RestApi</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <hr />
+
+                    <h6 class="fw-bold mb-2">Capabilities / Tools</h6>
+                    <div class="row g-2 mb-2">
+                        <div class="col-4">
+                            <input type="text" class="form-control form-control-sm" @bind="capName" placeholder="Capability Name (e.g. query_db)" />
+                        </div>
+                        <div class="col-6">
+                            <input type="text" class="form-control form-control-sm" @bind="capDesc" placeholder="Description for LLM matching" />
+                        </div>
+                        <div class="col-2">
+                            <button class="btn btn-sm btn-dark w-100" @onclick="AddCapability">Add</button>
+                        </div>
+                    </div>
+
+                    @if (newAgent.Capabilities.Count > 0)
+                    {
+                        <ul class="list-group">
+                            @foreach (var c in newAgent.Capabilities)
+                            {
+                                <li class="list-group-item d-flex justify-content-between align-items-center py-1 fs-7">
+                                    <span><code>@c.CapabilityName</code> - @c.Description</span>
+                                    <button class="btn btn-sm btn-link text-danger p-0" @onclick="() => newAgent.Capabilities.Remove(c)">Remove</button>
+                                </li>
+                            }
+                        </ul>
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="CloseAddModal">Cancel</button>
+                    <button class="btn btn-primary" @onclick="SubmitNewAgent">Save Agent</button>
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<AgentRegistration>? agents;
+    private bool isLoading = true;
+    private bool showAddModal = false;
+    private NewAgentForm newAgent = new();
+    private string capName = "";
+    private string capDesc = "";
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAgents();
+    }
+
+    private async Task LoadAgents()
+    {
+        isLoading = true;
+        try
+        {
+            agents = await Http.GetFromJsonAsync<List<AgentRegistration>>("api/registry/agents");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error loading agents: {ex.Message}");
+            agents = new List<AgentRegistration>();
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    private async Task DeactivateAgent(string id)
+    {
+        await Http.DeleteAsync($"api/registry/agents/{id}");
+        await LoadAgents();
+    }
+
+    private async Task SeedDefaultAgents()
+    {
+        await Http.PostAsync("api/registry/seed", null);
+        await LoadAgents();
+    }
+
+    private void OpenAddAgentModal()
+    {
+        newAgent = new NewAgentForm();
+        showAddModal = true;
+    }
+
+    private void CloseAddModal() => showAddModal = false;
+
+    private void AddCapability()
+    {
+        if (string.IsNullOrWhiteSpace(capName)) return;
+        newAgent.Capabilities.Add(new AgentCapabilityDto(capName, capDesc, "{}"));
+        capName = "";
+        capDesc = "";
+    }
+
+    private async Task SubmitNewAgent()
+    {
+        if (string.IsNullOrWhiteSpace(newAgent.Id) || string.IsNullOrWhiteSpace(newAgent.Name)) return;
+
+        var req = new RegisterAgentRequest(
+            Id: newAgent.Id,
+            Name: newAgent.Name,
+            Description: newAgent.Description,
+            EndpointUrl: newAgent.EndpointUrl,
+            TransportType: newAgent.TransportType,
+            Capabilities: newAgent.Capabilities
+        );
+
+        await Http.PostAsJsonAsync("api/registry/agents", req);
+        showAddModal = false;
+        await LoadAgents();
+    }
+
+    private class NewAgentForm
+    {
+        public string Id { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public string EndpointUrl { get; set; } = "http://localhost:5000";
+        public string TransportType { get; set; } = "StreamableHttpMcp";
+        public List<AgentCapabilityDto> Capabilities { get; set; } = new();
+    }
+}
