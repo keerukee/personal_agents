@@ -42,6 +42,21 @@ def run_inbox_watcher(client: OutlookClient):
             if is_processed(entry_id):
                 continue
 
+            subject_lower = email["subject"].lower()
+            body_lower = email["bodyText"].lower()
+            sender_lower = email.get("sender", "").lower()
+
+            # Ignore no-reply automated marketing emails
+            if "no-reply" in sender_lower or "noreply" in sender_lower or "donotreply" in sender_lower:
+                mark_processed(entry_id)
+                continue
+
+            # Only process relevant agent request emails
+            keywords = ["request", "agent", "lab report", "patient", "task", "report", "query"]
+            if not any(k in subject_lower or k in body_lower for k in keywords):
+                mark_processed(entry_id)
+                continue
+
             prompt = f"Process incoming email: {email['subject']}\nBody: {email['bodyText']}"
             event_guid = enqueue_inbound_event(
                 source="OutlookEmailAgent",
@@ -70,6 +85,11 @@ def run_outbound_queue_worker(client: OutlookClient):
                     subject = payload.get("subject", "Automated Response")
                     html_body = payload.get("htmlBody", payload.get("prompt", "<p>Task executed successfully.</p>"))
                     attachments = payload.get("attachments")
+
+                    if "no-reply" in to_recipient.lower() or "noreply" in to_recipient.lower() or "donotreply" in to_recipient.lower():
+                        complete_task(task_guid, result_json={"status": "Skipped automated no-reply recipient"})
+                        print(f"[OutlookWorker] Skipped sending to automated no-reply recipient '{to_recipient}'")
+                        continue
 
                     client.send_or_reply_email(
                         target_entry_id=target_entry_id,
