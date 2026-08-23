@@ -38,7 +38,7 @@ public class AgentRegistryServiceTests : IDisposable
 
         Assert.NotEmpty(agents);
         Assert.Contains(agents, a => a.Id == "sql-data-agent");
-        Assert.Contains(agents, a => a.Id == "python-runner-agent");
+        Assert.Contains(agents, a => a.Id == "mysql-data-agent");
         Assert.Contains(agents, a => a.Id == "outlook-email-agent");
     }
 

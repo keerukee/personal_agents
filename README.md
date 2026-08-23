@@ -1,12 +1,15 @@
-# Event-Driven Multi-Agent Platform (Pure Disconnected Architecture & Hybrid Home/Office AI Switcher)
+# Event-Driven Multi-Agent Platform (Pure Disconnected Architecture, MySQL Lab Reports & Hybrid AI Switcher)
 
 A production-ready, modular, event-driven Multi-Agent System targeting **.NET 10 (LTS) with C# 14** for core orchestration, micro-agents, and interactive Blazor dashboard, combined with **Python (`pywin32` / COM)** for local Outlook desktop automation and dynamic script execution.
 
 ---
 
-## 🏛️ Pure Disconnected System Architecture & Hybrid AI Switcher
+## 🏛️ Pure Disconnected System Architecture
 
 ```
+[ Gmail / External Sender ]
+          │ (Email to keerukee@outlook.com)
+          ▼
 [ Local Outlook Desktop App (MAPI) ]
 ▲                     │
 │ (pywin32 COM Send)  │ (pywin32 COM Watcher)
@@ -30,11 +33,32 @@ A production-ready, modular, event-driven Multi-Agent System targeting **.NET 10
   │     ├── Home Mode: Google Gemini API & Google Document AI         │
   │     └── Office Mode: Azure AI Foundry & Azure Document Intel      │
   │                                                                   │
-[ SqlDataAgent Worker (.NET 10) ] ────── (Polls & Updates AgentTasks)  │
-                                                                      │
-[ Interactive Blazor Server Dashboard (.NET 10) ] ────────────────────┘
+├─► [ MySqlDataAgent Worker (.NET 10) ] ── (Queries MySQL 3306 labreports)
+├─► [ SqlDataAgent Worker (.NET 10) ] ──── (Polls & Updates AgentTasks)
+│                                                                     │
+└─► [ Interactive Blazor Server Dashboard (.NET 10) ] ────────────────┘
   (Direct SQL Server DbContext Connection)
 ```
+
+---
+
+## 🏥 MySQL `labreports` Database Integration
+
+The solution includes a dedicated **MySqlDataAgent** (`src/Agents/MySqlDataAgent`):
+- **Target Database**: MySQL running on `localhost:3306` (user: `root`, password: `root`, database: `labreports`).
+- **Capability**: `query_labreports_db` (fetches last N patient records, lab test results, and medical reports).
+- **Execution**: Runs fully disconnected as a background worker polling `AgentTasks` where `TargetAgentId = 'mysql-data-agent'`.
+
+---
+
+## 📩 End-to-End Email to MySQL AI Response Flow
+
+1. **Trigger Email**: Send an email from Gmail to `keerukee@outlook.com` asking: *"Please provide last 5 patients information AI response"*.
+2. **Inbox Ingestion**: Python Outlook Agent (`main.py`) picks up the email from desktop Outlook MAPI and enqueues an event into SQL Server `InboundEvents`.
+3. **Orchestration**: Central Orchestrator Worker (`OrchestratorQueueWorker`) decomposes the prompt into two child tasks:
+   - **Step 1**: `mysql-data-agent` -> Action `query_labreports_db` (fetches last 5 patient records from MySQL `localhost:3306`).
+   - **Step 2**: `outlook-email-agent` -> Action `send_reply` (replies to the email with the formatted Markdown patient report).
+4. **Execution & Automated Reply**: `MySqlDataAgent` extracts the patient data from MySQL, and `OutlookEmailAgent` sends the response email via desktop Outlook MAPI!
 
 ---
 
@@ -50,60 +74,9 @@ Easily switch AI providers for LLM completions and Document Intelligence between
 - **LLM Completions**: Azure AI Foundry / Azure OpenAI (`AzureAiFoundryLlmProvider`).
 - **Document Intelligence**: Azure Document Intelligence / Form Recognizer (`AzureDocumentIntelligenceProvider`).
 
-```json
-{
-  "AiSettings": {
-    "Environment": "Home",
-    "Home": {
-      "GoogleApiKey": "YOUR_GEMINI_API_KEY",
-      "ModelName": "gemini-2.5-flash"
-    },
-    "Office": {
-      "AzureAiFoundryEndpoint": "https://your-foundry-endpoint.services.ai.azure.com/models",
-      "AzureAiFoundryApiKey": "YOUR_AZURE_KEY",
-      "AzureDocIntelEndpoint": "https://your-doc-intel.cognitiveservices.azure.com/",
-      "AzureDocIntelApiKey": "YOUR_DOC_INTEL_KEY"
-    }
-  }
-}
-```
-
 ---
 
-## 🔒 Why Zero WebAPI Architecture?
-
-1. **Zero Open Web Ports**: The Central Orchestrator and sub-agents run as background worker processes. They open **zero inbound HTTP ports**, providing maximum enterprise security.
-2. **Direct DB Connectivity**: The Blazor Server Dashboard connects directly to SQL Server (`AgentRegistryDb`) via Entity Framework Core (`DbContext`).
-3. **100% Resilience & Zero Overhead**: Eliminates Kestrel WebAPI server overhead, network timeouts, and port conflicts.
-
----
-
-## 📦 Projects & Solution Breakdown
-
-### 1. `src/CentralOrchestrator` (.NET 10 LTS Pure Worker Service)
-- **Role**: Core orchestration engine & database event bus processor (no Kestrel/WebAPI).
-- **Key Features**:
-  - `AiProviderFactory.cs`: Dynamically resolves `GoogleGeminiLlmProvider` vs. `AzureAiFoundryLlmProvider` and `GoogleDocumentAiProvider` vs. `AzureDocumentIntelligenceProvider`.
-  - `OrchestratorQueueWorker.cs`: `BackgroundService` polling `InboundEvents` where `Status = 'Pending'`.
-
-### 2. `src/AgentDashboard` (.NET 10 Blazor Server Web App)
-- **Role**: Interactive management dashboard connected directly to SQL Server.
-
-### 3. `src/Agents/SqlDataAgent` (.NET 10 Worker)
-- **Role**: SQL query execution micro-agent.
-
-### 4. `src/Agents/OutlookEmailAgent` (Python Desktop Agent)
-- **Role**: Local desktop Outlook bridge (**Zero Graph API & Zero SMTP**).
-
-### 5. `src/Common/Contracts` (.NET 10 Class Library)
-- **Key Models**: `DatabaseQueueModels.cs`, `AiProviderModels.cs` (`LlmCompletionRequest`, `DocumentAnalysisRequest`).
-
-### 6. `tests/CentralOrchestrator.Tests` (.NET 10 XUnit Test Suite)
-- Passed **12 / 12 automated unit tests**.
-
----
-
-## 🚀 How to Run
+## 🚀 How to Run the Complete Platform
 
 ### 1. Build and Run Tests
 ```bash
@@ -116,9 +89,9 @@ dotnet test MultiAgentPlatform.sln
 dotnet run --project src/CentralOrchestrator/CentralOrchestrator.csproj
 ```
 
-### 3. Run SqlDataAgent Worker
+### 3. Run MySqlDataAgent Worker (MySQL localhost:3306)
 ```bash
-dotnet run --project src/Agents/SqlDataAgent/SqlDataAgent.csproj
+dotnet run --project src/Agents/MySqlDataAgent/MySqlDataAgent.csproj
 ```
 
 ### 4. Run Blazor Dashboard
@@ -126,7 +99,7 @@ dotnet run --project src/Agents/SqlDataAgent/SqlDataAgent.csproj
 dotnet run --project src/AgentDashboard/AgentDashboard.csproj
 ```
 
-### 5. Run Python Outlook Agent
+### 5. Run Python Outlook Desktop Ingestion & Reply Worker
 ```bash
 cd src/Agents/OutlookEmailAgent
 pip install -r requirements.txt

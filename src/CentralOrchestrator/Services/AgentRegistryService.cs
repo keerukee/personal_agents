@@ -136,28 +136,39 @@ public class AgentRegistryService : IAgentRegistryService
 
         _logger.LogInformation("Seeding initial default agent registry into SQLite DB...");
 
-        var defaults = new List<RegisterAgentRequest>
+        var defaultAgents = new List<RegisterAgentRequest>
         {
             new(
-                "sql-data-agent",
-                "SqlDataAgent",
-                "Executes SQL queries against regional database and formats tabular results",
-                "http://localhost:5001/mcp",
-                "StreamableHttpMcp",
+                "mysql-data-agent",
+                "MySqlDataAgent",
+                "Connects to local MySQL labreports database (localhost:3306) to query patient records, medical reports, and lab results.",
+                "DatabaseQueue://mysql-data-agent",
+                "DatabaseQueue",
                 new List<AgentCapabilityDto>
                 {
-                    new("query_database", "Run parameterized read-only SQL queries", "{\"type\":\"object\",\"properties\":{\"sql\":{\"type\":\"string\"},\"format\":{\"type\":\"string\"}}}")
+                    new("query_labreports_db", "Queries MySQL labreports database (localhost:3306) to fetch patient information, lab test results, and medical records.", "{\"type\": \"object\", \"properties\": {\"patientCount\": {\"type\": \"integer\", \"default\": 5}}}")
                 }
             ),
             new(
-                "python-runner-agent",
-                "PythonRunnerAgent",
-                "Dynamically inspects dependencies, installs packages, and executes Python code in sandbox",
-                "http://localhost:5002/execute-script",
-                "PythonFastApi",
+                "sql-data-agent",
+                "SqlDataAgent",
+                "Specialized in executing SQL queries against relational databases and formatting results.",
+                "DatabaseQueue://sql-data-agent",
+                "DatabaseQueue",
                 new List<AgentCapabilityDto>
                 {
-                    new("execute_script", "Run python code snippet with dynamic dependencies", "{\"type\":\"object\",\"properties\":{\"code\":{\"type\":\"string\"}}}")
+                    new("query_database", "Executes a SQL query against the database and returns tabular results.", "{\"type\": \"object\", \"properties\": {\"sql\": {\"type\": \"string\"}}}")
+                }
+            ),
+            new(
+                "outlook-email-agent",
+                "OutlookEmailAgent",
+                "Handles Outlook desktop email reading, drafting, and sending via local Windows MAPI.",
+                "DatabaseQueue://outlook-email-agent",
+                "DatabaseQueue",
+                new List<AgentCapabilityDto>
+                {
+                    new("send_email", "Sends or replies to an email via desktop Outlook MAPI namespace.", "{\"type\": \"object\", \"properties\": {\"to\": {\"type\": \"string\"}, \"subject\": {\"type\": \"string\"}, \"htmlBody\": {\"type\": \"string\"}}}")
                 }
             ),
             new(
@@ -184,9 +195,9 @@ public class AgentRegistryService : IAgentRegistryService
             )
         };
 
-        foreach (var req in defaults)
+        foreach (var agent in defaultAgents)
         {
-            await RegisterOrUpdateAgentAsync(req);
+            await RegisterOrUpdateAgentAsync(agent);
         }
 
         _logger.LogInformation("Default agent registry seeding complete.");
