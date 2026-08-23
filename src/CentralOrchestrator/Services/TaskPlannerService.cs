@@ -167,9 +167,21 @@ Instructions:
             return steps; // Returns empty list (0 tasks created)
         }
 
-        // 2. Check if request requires MySQL lab report extraction
+        // 2. Dynamically resolve registered database & email agents from activeAgents DB registry
         if (promptLower.Contains("patient") || promptLower.Contains("lab") || promptLower.Contains("mysql"))
         {
+            var mysqlAgent = activeAgents.FirstOrDefault(a => a.Capabilities.Any(c => c.CapabilityName == "query_labreports_db"))
+                          ?? activeAgents.FirstOrDefault(a => a.Description.Contains("lab", StringComparison.OrdinalIgnoreCase) || a.Name.Contains("MySQL", StringComparison.OrdinalIgnoreCase));
+            
+            var emailAgent = activeAgents.FirstOrDefault(a => a.Capabilities.Any(c => c.CapabilityName == "send_email" || c.CapabilityName == "send_reply"))
+                          ?? activeAgents.FirstOrDefault(a => a.Description.Contains("email", StringComparison.OrdinalIgnoreCase) || a.Name.Contains("Outlook", StringComparison.OrdinalIgnoreCase));
+
+            string mysqlAgentId = mysqlAgent?.Id ?? "mysql-data-agent";
+            string mysqlAction = mysqlAgent?.Capabilities.FirstOrDefault()?.CapabilityName ?? "query_labreports_db";
+
+            string emailAgentId = emailAgent?.Id ?? "outlook-email-agent";
+            string emailAction = emailAgent?.Capabilities.FirstOrDefault()?.CapabilityName ?? "send_email";
+
             var mysqlParams = new Dictionary<string, object>();
             if (eventMessage.Data.ValueKind == JsonValueKind.Object)
             {
@@ -189,18 +201,18 @@ Instructions:
                 mysqlParams["genderFilter"] = "Male";
             }
 
-            // Step 1: Query MySQL lab reports database
+            // Step 1: Query database (Agent ID dynamically pulled from DB registry)
             steps.Add(new TaskStep(
                 StepId: 1,
-                AgentId: "mysql-data-agent",
-                Action: "query_labreports_db",
+                AgentId: mysqlAgentId,
+                Action: mysqlAction,
                 Parameters: mysqlParams,
                 DependsOn: new List<int>(),
                 Status: "Pending",
                 ResultOutput: null
             ));
 
-            // Step 2: Send extracted patient report via Outlook email
+            // Step 2: Send extracted report via email (Agent ID dynamically pulled from DB registry)
             var emailParams = new Dictionary<string, object>(mysqlParams);
             if (eventMessage.Data.TryGetProperty("sender", out var senderProp))
             {
@@ -213,8 +225,8 @@ Instructions:
 
             steps.Add(new TaskStep(
                 StepId: 2,
-                AgentId: "outlook-email-agent",
-                Action: "send_email",
+                AgentId: emailAgentId,
+                Action: emailAction,
                 Parameters: emailParams,
                 DependsOn: new List<int> { 1 },
                 Status: "Pending",
