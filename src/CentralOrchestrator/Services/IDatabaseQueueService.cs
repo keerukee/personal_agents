@@ -13,5 +13,6 @@ public interface IDatabaseQueueService
     Task<List<AgentTaskDto>> GetAllAgentTasksAsync(string? agentId = null, string? status = null, int limit = 50);
     Task<bool> ClaimTaskAsync(string taskGuid);
     Task<bool> UpdateTaskResultAsync(string taskGuid, UpdateTaskResultRequest request);
+    Task<bool> UpdateTaskPayloadAndStatusAsync(string taskGuid, string newPayloadJson, string status);
     Task<List<AgentTaskDto>> GetTasksForEventAsync(string parentEventGuid);
 }

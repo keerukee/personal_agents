@@ -99,6 +99,63 @@ public class OrchestratorQueueWorker : BackgroundService
         foreach (var evt in processingEvents)
         {
             var tasks = await queueService.GetTasksForEventAsync(evt.EventGuid);
+
+            // 1. Promote PendingDependency tasks when prerequisite step completes
+            var pendingDepTasks = tasks.Where(t => t.Status == "PendingDependency").ToList();
+            foreach (var depTask in pendingDepTasks)
+            {
+                var prereqTasks = tasks.Where(t => t.StepOrder < depTask.StepOrder).ToList();
+                if (prereqTasks.Count > 0 && prereqTasks.All(t => t.Status == "Completed"))
+                {
+                    // Extract completed result output from prerequisite step(s)
+                    string aggregatedOutput = "";
+                    foreach (var p in prereqTasks)
+                    {
+                        if (!string.IsNullOrWhiteSpace(p.ResultJson))
+                        {
+                            try
+                            {
+                                using var doc = JsonDocument.Parse(p.ResultJson);
+                                if (doc.RootElement.TryGetProperty("output", out var outProp))
+                                {
+                                    aggregatedOutput += outProp.GetString() + "\n\n";
+                                }
+                                else if (doc.RootElement.TryGetProperty("resultOutput", out var rProp))
+                                {
+                                    aggregatedOutput += rProp.GetString() + "\n\n";
+                                }
+                            }
+                            catch { }
+                        }
+                    }
+
+                    // Merge result output into dependent step's PayloadJson
+                    var payloadDict = new Dictionary<string, object>();
+                    try
+                    {
+                        using var pDoc = JsonDocument.Parse(depTask.PayloadJson);
+                        foreach (var prop in pDoc.RootElement.EnumerateObject())
+                        {
+                            payloadDict[prop.Name] = prop.Value.ToString();
+                        }
+                    }
+                    catch { }
+
+                    if (!string.IsNullOrWhiteSpace(aggregatedOutput))
+                    {
+                        payloadDict["htmlBody"] = aggregatedOutput.Trim();
+                        payloadDict["output"] = aggregatedOutput.Trim();
+                    }
+
+                    string newPayloadJson = JsonSerializer.Serialize(payloadDict);
+
+                    // Promote status from PendingDependency -> Pending
+                    await queueService.UpdateTaskPayloadAndStatusAsync(depTask.TaskGuid, newPayloadJson, "Pending");
+                    _logger.LogInformation("Promoted Task '{TaskGuid}' (Step {StepOrder}) to Pending with merged report output", depTask.TaskGuid, depTask.StepOrder);
+                }
+            }
+
+            // 2. Conclude event when all tasks are complete
             if (tasks.Count > 0 && tasks.All(t => t.Status == "Completed" || t.Status == "Failed" || t.Status == "Skipped"))
             {
                 var finalStatus = tasks.Any(t => t.Status == "Failed") ? "CompletedWithErrors" : "Completed";

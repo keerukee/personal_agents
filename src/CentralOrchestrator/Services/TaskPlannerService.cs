@@ -160,9 +160,15 @@ Instructions:
                 var capDescLower = cap.Description.ToLower();
                 var agentDescLower = agent.Description.ToLower();
 
+                // Common stopwords to exclude from capability keyword matching
+                var stopwords = new HashSet<string> { "from", "with", "that", "this", "have", "your", "their", "about", "into", "some", "please", "provide", "response" };
+
                 // Match request intent dynamically against registered agent descriptions and capability actions
                 bool matches = promptLower.Split(' ', ',', '.', ':', '\n', '\r', '-').Any(word => 
-                    word.Length > 3 && (capNameLower.Contains(word) || capDescLower.Contains(word) || agentDescLower.Contains(word)));
+                {
+                    var clean = word.TrimEnd('s');
+                    return clean.Length > 3 && !stopwords.Contains(clean) && (capNameLower.Contains(clean) || capDescLower.Contains(clean) || agentDescLower.Contains(clean));
+                });
 
                 if (matches)
                 {
@@ -197,14 +203,25 @@ Instructions:
                         Status: "Pending",
                         ResultOutput: null
                     ));
-
-                    lastStepId = currentStepId;
                     break;
                 }
             }
         }
 
-        return steps;
+        // Order steps logically so data retrieval capabilities (e.g. query_labreports_db) run first, and communication capabilities (e.g. send_email) run second
+        var orderedSteps = steps
+            .OrderByDescending(s => s.Action.Contains("query") || s.Action.Contains("analyze") || s.AgentId.Contains("data"))
+            .ToList();
+
+        var finalSteps = new List<TaskStep>();
+        for (int i = 0; i < orderedSteps.Count; i++)
+        {
+            int currentStepId = i + 1;
+            var dependsOnList = i > 0 ? new List<int> { i } : new List<int>();
+            finalSteps.Add(orderedSteps[i] with { StepId = currentStepId, DependsOn = dependsOnList });
+        }
+
+        return finalSteps;
     }
 
     public async Task<TaskPlan> ExecutePlanAsync(TaskPlan plan, CancellationToken cancellationToken = default)

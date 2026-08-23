@@ -67,7 +67,8 @@ public class DatabaseQueueServiceTests : IDisposable
         var tasks = await _queueService.CreateAgentTasksAsync(evt.EventGuid, taskRequests);
 
         Assert.Equal(2, tasks.Count);
-        Assert.All(tasks, t => Assert.Equal("Pending", t.Status));
+        Assert.Equal("Pending", tasks[0].Status);
+        Assert.Equal("PendingDependency", tasks[1].Status);
 
         var pendingSql = await _queueService.GetPendingTasksForAgentAsync("sql-data-agent");
         Assert.Single(pendingSql);

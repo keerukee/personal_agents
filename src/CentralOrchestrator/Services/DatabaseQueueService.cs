@@ -87,7 +87,7 @@ public class DatabaseQueueService : IDatabaseQueueService
                 TargetAgentId = req.TargetAgentId,
                 Action = req.Action,
                 PayloadJson = string.IsNullOrWhiteSpace(req.PayloadJson) ? "{}" : req.PayloadJson,
-                Status = "Pending",
+                Status = req.StepOrder == 1 ? "Pending" : "PendingDependency",
                 CreatedAt = DateTimeOffset.UtcNow
             };
             entities.Add(task);
@@ -156,6 +156,19 @@ public class DatabaseQueueService : IDatabaseQueueService
 
         await _dbContext.SaveChangesAsync();
         _logger.LogInformation("Task '{TaskGuid}' completed with Status '{Status}'", taskGuid, request.Status);
+        return true;
+    }
+
+    public async Task<bool> UpdateTaskPayloadAndStatusAsync(string taskGuid, string newPayloadJson, string status)
+    {
+        var entity = await _dbContext.AgentTasks.FirstOrDefaultAsync(t => t.TaskGuid == taskGuid);
+        if (entity == null) return false;
+
+        entity.PayloadJson = newPayloadJson;
+        entity.Status = status;
+
+        await _dbContext.SaveChangesAsync();
+        _logger.LogInformation("Updated Task '{TaskGuid}' Payload and Status to '{Status}'", taskGuid, status);
         return true;
     }
 
