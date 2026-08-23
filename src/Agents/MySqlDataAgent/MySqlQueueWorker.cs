@@ -44,7 +44,7 @@ public class MySqlQueueWorker : BackgroundService
 
                     try
                     {
-                        var resultMarkdown = await ExecuteMySqlPatientQueryAsync(task.PayloadJson, stoppingToken);
+                        var resultMarkdown = await ExecuteRealMySqlPatientQueryAsync(task.PayloadJson, stoppingToken);
 
                         var resultObj = new
                         {
@@ -79,7 +79,7 @@ public class MySqlQueueWorker : BackgroundService
         }
     }
 
-    private async Task<string> ExecuteMySqlPatientQueryAsync(string payloadJson, CancellationToken cancellationToken)
+    private async Task<string> ExecuteRealMySqlPatientQueryAsync(string payloadJson, CancellationToken cancellationToken)
     {
         int limit = 5;
         try
@@ -92,99 +92,98 @@ public class MySqlQueueWorker : BackgroundService
         }
         catch { }
 
-        _logger.LogInformation("Connecting to MySQL localhost:3306 (database: labreports) to fetch last {Count} patients...", limit);
+        _logger.LogInformation("Executing JOIN query across labreports.lab_report and patients_info.vw_hospitalpatientcurrent for last {Count} patients...", limit);
 
-        try
+        await using var conn = new MySqlConnection(MySqlConnectionString);
+        await conn.OpenAsync(cancellationToken);
+
+        string sql = @"
+            SELECT 
+                lr.PatientPID,
+                p.FirstName,
+                p.LastName,
+                p.AgeYears,
+                p.HospitalName,
+                lr.ReportedAt,
+                lr.Content,
+                ai.Diagnostic,
+                ai.PatientAdvice
+            FROM labreports.lab_report lr
+            LEFT JOIN (
+                SELECT DISTINCT PatientId, FirstName, LastName, AgeYears, HospitalName 
+                FROM patients_info.vw_hospitalpatientcurrent
+            ) p ON lr.PatientPID = p.PatientId
+            LEFT JOIN labreports.lab_report_ai ai ON lr.ReportId = ai.ReportId
+            ORDER BY lr.CreatedAt DESC
+            LIMIT " + limit + ";";
+
+        await using var cmd = new MySqlCommand(sql, conn);
+        await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
+
+        var sb = new StringBuilder();
+        sb.AppendLine("### 🏥 MySQL Lab Reports & Patients Information Report");
+        sb.AppendLine("**Databases Joined:** `labreports.lab_report` ⟗ `patients_info.vw_hospitalpatientcurrent`");
+        sb.AppendLine($"**Query Time:** {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
+        sb.AppendLine();
+        sb.AppendLine("| # | Patient Name | Age | Hospital | Reported Date | Key Lab Tests & Abnormal Values | AI Diagnostic Summary |");
+        sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
+
+        int rowIdx = 1;
+        while (await reader.ReadAsync(cancellationToken))
         {
-            await using var conn = new MySqlConnection(MySqlConnectionString);
-            await conn.OpenAsync(cancellationToken);
+            string patientPid = reader.IsDBNull(0) ? "N/A" : reader.GetString(0);
+            string firstName = reader.IsDBNull(1) ? "" : reader.GetString(1);
+            string lastName = reader.IsDBNull(2) ? "" : reader.GetString(2);
+            string ageStr = reader.IsDBNull(3) ? "N/A" : reader.GetValue(3).ToString()!;
+            string hospitalStr = reader.IsDBNull(4) ? "Hospital" : reader.GetString(4);
+            string reportedAt = reader.IsDBNull(5) ? "N/A" : reader.GetDateTime(5).ToString("yyyy-MM-dd");
+            string contentJson = reader.IsDBNull(6) ? "{}" : reader.GetString(6);
+            string aiDiagnostic = reader.IsDBNull(7) ? "Pending AI analysis" : reader.GetString(7);
 
-            // Attempt to query patients table or lab_reports table from MySQL labreports database
-            var sb = new StringBuilder();
-            sb.AppendLine("### 🏥 MySQL Lab Reports & Patients Information Report");
-            sb.AppendLine($"**Database:** `labreports` on `localhost:3306`");
-            sb.AppendLine($"**Query Time:** {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-            sb.AppendLine();
-
-            string querySql = @"
-                SELECT 
-                    COALESCE(patient_id, id) AS PatientID,
-                    COALESCE(patient_name, name, 'Patient') AS PatientName,
-                    COALESCE(age, 35) AS Age,
-                    COALESCE(gender, 'Unspecified') AS Gender,
-                    COALESCE(test_name, lab_report, 'Blood Panel & Vitals') AS TestName,
-                    COALESCE(status, result, 'Normal') AS TestResult,
-                    COALESCE(report_date, created_at, NOW()) AS ReportDate
-                FROM (
-                    SELECT * FROM information_schema.tables WHERE table_schema = 'labreports'
-                ) t LIMIT " + limit;
-
-            // Execute query safely
-            await using var cmd = new MySqlCommand("SHOW TABLES FROM labreports;", conn);
-            await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
-            var tables = new List<string>();
-            while (await reader.ReadAsync(cancellationToken))
+            string fullName = $"{firstName} {lastName}".Trim();
+            if (string.IsNullOrWhiteSpace(fullName))
             {
-                tables.Add(reader.GetString(0));
+                fullName = $"Patient GUID: {patientPid[..8]}...";
             }
-            await reader.CloseAsync();
 
-            if (tables.Count > 0)
+            var testList = new List<string>();
+            try
             {
-                var targetTable = tables.FirstOrDefault(t => t.Contains("patient", StringComparison.OrdinalIgnoreCase) || t.Contains("report", StringComparison.OrdinalIgnoreCase) || t.Contains("lab", StringComparison.OrdinalIgnoreCase)) ?? tables[0];
-
-                await using var dataCmd = new MySqlCommand($"SELECT * FROM `{targetTable}` ORDER BY 1 DESC LIMIT {limit};", conn);
-                await using var dataReader = await dataCmd.ExecuteReaderAsync(cancellationToken);
-
-                sb.AppendLine($"**Source Table:** `{targetTable}`");
-                sb.AppendLine();
-                sb.AppendLine("| # | Record Details / Columns | Value |");
-                sb.AppendLine("| :--- | :--- | :--- |");
-
-                int rowIdx = 1;
-                while (await dataReader.ReadAsync(cancellationToken))
+                using var jsonDoc = JsonDocument.Parse(contentJson);
+                if (jsonDoc.RootElement.TryGetProperty("Reports", out var reportsProp) && reportsProp.ValueKind == JsonValueKind.Object)
                 {
-                    var rowSummary = new List<string>();
-                    for (int i = 0; i < dataReader.FieldCount; i++)
+                    foreach (var category in reportsProp.EnumerateObject())
                     {
-                        var colName = dataReader.GetName(i);
-                        var val = dataReader.IsDBNull(i) ? "NULL" : dataReader.GetValue(i)?.ToString();
-                        rowSummary.Add($"**{colName}:** {val}");
+                        if (category.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            foreach (var test in category.Value.EnumerateObject())
+                            {
+                                if (test.Value.ValueKind == JsonValueKind.Object)
+                                {
+                                    string reportVal = test.Value.TryGetProperty("Report", out var rVal) ? rVal.GetString() ?? "" : "";
+                                    bool isAbnormal = test.Value.TryGetProperty("IsAbnormal", out var abVal) && abVal.GetBoolean();
+
+                                    if (!string.IsNullOrWhiteSpace(reportVal))
+                                    {
+                                        string mark = isAbnormal ? " ⚠️ (ABNORMAL)" : "";
+                                        testList.Add($"**{test.Name}:** {reportVal.Trim()}{mark}");
+                                    }
+                                }
+                            }
+                        }
                     }
-                    sb.AppendLine($"| {rowIdx++} | Patient Record | {string.Join(" \\| ", rowSummary)} |");
                 }
             }
-            else
-            {
-                sb.AppendLine("| Patient ID | Patient Name | Age | Gender | Test / Report | Result |");
-                sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- |");
-                sb.AppendLine("| P-1005 | John Doe | 42 | Male | Complete Blood Count (CBC) | Normal |");
-                sb.AppendLine("| P-1004 | Jane Smith | 38 | Female | Lipid Panel | Cholesterol: 195 mg/dL |");
-                sb.AppendLine("| P-1003 | Robert Johnson | 55 | Male | HbA1c Diabetes Screen | 5.8% (Pre-diabetic) |");
-                sb.AppendLine("| P-1002 | Emily Davis | 29 | Female | Thyroid Panel (TSH) | 2.1 mIU/L (Normal) |");
-                sb.AppendLine("| P-1001 | Michael Brown | 61 | Male | Comprehensive Metabolic | Normal |");
-            }
+            catch { }
 
-            return sb.ToString();
+            string testSummary = testList.Count > 0 ? string.Join("<br/>", testList.Take(4)) : "Laboratory findings recorded";
+            string truncatedDiag = aiDiagnostic.Length > 120 ? aiDiagnostic[..120] + "..." : aiDiagnostic;
+
+            sb.AppendLine($"| {rowIdx++} | **{fullName}** | {ageStr} | {hospitalStr} | {reportedAt} | {testSummary} | {truncatedDiag} |");
         }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "MySQL connection to labreports encountered issue. Returning structured patient AI summary for demonstration.");
 
-            return $@"### 🏥 MySQL Lab Reports & Patients Information Report
-**Database:** `labreports` on `localhost:3306` (Fallback Demo Data)
-**Extracted Patients Count:** {limit}
-**Query Status:** Success
-
-| Patient ID | Patient Name | Age | Gender | Test / Lab Report | Status / Result | Date |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| P-1005 | John Doe | 42 | Male | Complete Blood Count (CBC) | Normal (WBC: 6.5) | 2026-08-23 |
-| P-1004 | Jane Smith | 38 | Female | Lipid Panel | Cholesterol: 195 mg/dL | 2026-08-22 |
-| P-1003 | Robert Johnson | 55 | Male | HbA1c Diabetes Screen | 5.8% (Pre-diabetic) | 2026-08-22 |
-| P-1002 | Emily Davis | 29 | Female | Thyroid Panel (TSH) | 2.1 mIU/L (Normal) | 2026-08-21 |
-| P-1001 | Michael Brown | 61 | Male | Comprehensive Metabolic | All Markers Normal | 2026-08-20 |
-
-*Processed by MySqlDataAgent via Disconnected Database Queue at {DateTimeOffset.UtcNow:u}*";
-        }
+        sb.AppendLine();
+        sb.AppendLine($"*Extracted live from MySQL `labreports` and `patients_info` databases at {DateTimeOffset.UtcNow:u}*");
+        return sb.ToString();
     }
 }
