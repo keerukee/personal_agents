@@ -167,6 +167,63 @@ Instructions:
             return steps; // Returns empty list (0 tasks created)
         }
 
+        // 2. Check if request requires MySQL lab report extraction
+        if (promptLower.Contains("patient") || promptLower.Contains("lab") || promptLower.Contains("mysql"))
+        {
+            var mysqlParams = new Dictionary<string, object>();
+            if (eventMessage.Data.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in eventMessage.Data.EnumerateObject())
+                {
+                    mysqlParams[prop.Name] = prop.Value.ToString();
+                }
+            }
+            mysqlParams["prompt"] = eventMessage.Prompt;
+
+            if (promptLower.Contains("female") || promptLower.Contains("woman") || promptLower.Contains("women"))
+            {
+                mysqlParams["genderFilter"] = "Female";
+            }
+            else if (promptLower.Contains("male") || promptLower.Contains("man") || promptLower.Contains("men"))
+            {
+                mysqlParams["genderFilter"] = "Male";
+            }
+
+            // Step 1: Query MySQL lab reports database
+            steps.Add(new TaskStep(
+                StepId: 1,
+                AgentId: "mysql-data-agent",
+                Action: "query_labreports_db",
+                Parameters: mysqlParams,
+                DependsOn: new List<int>(),
+                Status: "Pending",
+                ResultOutput: null
+            ));
+
+            // Step 2: Send extracted patient report via Outlook email
+            var emailParams = new Dictionary<string, object>(mysqlParams);
+            if (eventMessage.Data.TryGetProperty("sender", out var senderProp))
+            {
+                emailParams["to"] = senderProp.GetString() ?? "keerukee@outlook.com";
+            }
+            if (eventMessage.Data.TryGetProperty("subject", out var subjProp))
+            {
+                emailParams["subject"] = $"Re: {subjProp.GetString()}";
+            }
+
+            steps.Add(new TaskStep(
+                StepId: 2,
+                AgentId: "outlook-email-agent",
+                Action: "send_email",
+                Parameters: emailParams,
+                DependsOn: new List<int> { 1 },
+                Status: "Pending",
+                ResultOutput: null
+            ));
+
+            return steps;
+        }
+
         int stepIdCounter = 1;
         foreach (var agent in activeAgents)
         {
@@ -175,23 +232,7 @@ Instructions:
                 var capNameLower = cap.CapabilityName.ToLower();
                 var capDescLower = cap.Description.ToLower();
 
-                bool matches = false;
-                if (agent.Id == "mysql-data-agent")
-                {
-                    matches = promptLower.Contains("patient") || promptLower.Contains("mysql") || promptLower.Contains("lab");
-                }
-                else if (agent.Id == "sql-data-agent")
-                {
-                    matches = (promptLower.Contains("database") || promptLower.Contains("sales") || promptLower.Contains("sql")) && !promptLower.Contains("patient");
-                }
-                else if (agent.Id == "outlook-email-agent")
-                {
-                    matches = promptLower.Contains("send") || promptLower.Contains("email") || promptLower.Contains("reply") || promptLower.Contains("mail");
-                }
-                else
-                {
-                    matches = promptLower.Split(' ').Any(word => word.Length > 4 && (capNameLower.Contains(word) || capDescLower.Contains(word)));
-                }
+                bool matches = promptLower.Split(' ').Any(word => word.Length > 4 && (capNameLower.Contains(word) || capDescLower.Contains(word)));
 
                 if (matches)
                 {

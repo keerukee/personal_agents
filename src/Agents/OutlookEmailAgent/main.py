@@ -68,7 +68,7 @@ def run_outbound_queue_worker(client: OutlookClient):
                     target_entry_id = payload.get("targetEntryId")
                     to_recipient = payload.get("to") or payload.get("sender") or "keerukee@outlook.com"
                     subject = payload.get("subject", "Automated Response")
-                    html_body = payload.get("htmlBody", payload.get("prompt", "<p>Task executed successfully.</p>"))
+                    html_body = payload.get("htmlBody") or payload.get("output") or payload.get("resultOutput") or "<p>Task executed successfully.</p>"
                     attachments = payload.get("attachments")
 
                     if "no-reply" in to_recipient.lower() or "noreply" in to_recipient.lower() or "donotreply" in to_recipient.lower():
