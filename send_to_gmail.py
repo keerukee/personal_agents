@@ -62,10 +62,12 @@ def send_real_labreports_to_gmail():
                         for test_name, test_data in tests.items():
                             if isinstance(test_data, dict):
                                 val = test_data.get("Report")
+                                std_val = test_data.get("StandardValue")
                                 is_abnormal = test_data.get("IsAbnormal", False)
                                 if val and str(val).strip():
+                                    ref_str = f" <span style='color: #555; font-style: italic;'>(Ref: {str(std_val).strip()})</span>" if std_val and str(std_val).strip() else ""
                                     mark = " <span style='color: red; font-weight: bold;'>⚠️ (ABNORMAL)</span>" if is_abnormal else ""
-                                    test_list.append(f"<b>{test_name}:</b> {str(val).strip()}{mark}")
+                                    test_list.append(f"<b>{test_name}:</b> {str(val).strip()}{ref_str}{mark}")
             except Exception:
                 pass
 

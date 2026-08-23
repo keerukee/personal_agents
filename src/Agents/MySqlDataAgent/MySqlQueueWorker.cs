@@ -161,12 +161,14 @@ public class MySqlQueueWorker : BackgroundService
                                 if (test.Value.ValueKind == JsonValueKind.Object)
                                 {
                                     string reportVal = test.Value.TryGetProperty("Report", out var rVal) ? rVal.GetString() ?? "" : "";
+                                    string stdVal = test.Value.TryGetProperty("StandardValue", out var sVal) && sVal.ValueKind == JsonValueKind.String ? sVal.GetString() ?? "" : "";
                                     bool isAbnormal = test.Value.TryGetProperty("IsAbnormal", out var abVal) && abVal.GetBoolean();
 
                                     if (!string.IsNullOrWhiteSpace(reportVal))
                                     {
+                                        string refStr = !string.IsNullOrWhiteSpace(stdVal) ? $" *(Ref: {stdVal.Trim()})*" : "";
                                         string mark = isAbnormal ? " ⚠️ (ABNORMAL)" : "";
-                                        testList.Add($"**{test.Name}:** {reportVal.Trim()}{mark}");
+                                        testList.Add($"**{test.Name}:** {reportVal.Trim()}{refStr}{mark}");
                                     }
                                 }
                             }
