@@ -2,7 +2,7 @@ import time
 import sqlite3
 import os
 from outlook_client import OutlookClient
-from db_queue import enqueue_inbound_event, fetch_pending_tasks, claim_task, complete_task
+from db_queue import enqueue_inbound_event, fetch_pending_tasks, claim_task, complete_task, fetch_event_results
 
 LEDGER_DB = "processed_emails.db"
 
@@ -65,10 +65,13 @@ def run_outbound_queue_worker(client: OutlookClient):
             if claim_task(task_guid):
                 print(f"[OutlookWorker] Claimed outbound email task {task_guid}")
                 try:
+                    parent_event_guid = t.get("parent_event_guid")
                     target_entry_id = payload.get("targetEntryId")
                     to_recipient = payload.get("to") or payload.get("sender") or "keerukee@outlook.com"
                     subject = payload.get("subject", "Automated Response")
-                    html_body = payload.get("htmlBody") or payload.get("output") or payload.get("resultOutput") or "<p>Task executed successfully.</p>"
+                    
+                    event_outputs = fetch_event_results(parent_event_guid) if parent_event_guid else ""
+                    html_body = payload.get("htmlBody") or payload.get("output") or payload.get("resultOutput") or event_outputs or "<p>Task executed successfully.</p>"
                     attachments = payload.get("attachments")
 
                     if "no-reply" in to_recipient.lower() or "noreply" in to_recipient.lower() or "donotreply" in to_recipient.lower():

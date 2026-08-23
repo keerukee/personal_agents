@@ -94,3 +94,34 @@ def complete_task(task_guid: str, result_json: dict, error_message: str = None):
     """, (status, result_str, error_message, now, task_guid))
     conn.commit()
     conn.close()
+
+def fetch_event_results(parent_event_guid: str) -> str:
+    """Fetches completed task result outputs for the parent event."""
+    if not parent_event_guid:
+        return ""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT ResultJson
+            FROM AgentTasks
+            WHERE ParentEventGuid = ? AND Status = 'Completed' AND ResultJson IS NOT NULL
+            ORDER BY StepOrder ASC
+        """, (parent_event_guid,))
+        rows = cursor.fetchall()
+        conn.close()
+        
+        outputs = []
+        for r in rows:
+            try:
+                res = json.loads(r[0])
+                out = res.get("output") or res.get("resultOutput")
+                if out:
+                    outputs.append(str(out))
+            except Exception:
+                pass
+                
+        return "<br/><br/>".join(outputs)
+    except Exception as e:
+        print(f"[fetch_event_results Error] {e}")
+        return ""
