@@ -1,48 +1,51 @@
 using CentralOrchestrator.Data;
-using CentralOrchestrator.Endpoints;
 using CentralOrchestrator.Services;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
-var builder = WebApplication.CreateBuilder(args);
-
-// Configure SQL Server / SQLite DbContext for Dynamic Agent Registry & Database Queue
-var connectionString = builder.Configuration.GetConnectionString("AgentRegistryConnection") 
-    ?? "Server=localhost;Database=AgentRegistryDb;Trusted_Connection=True;TrustServerCertificate=True;";
-
-builder.Services.AddDbContext<AgentRegistryDbContext>(options =>
-{
-    if (connectionString.Contains("Data Source=") && connectionString.EndsWith(".db"))
+var host = Host.CreateDefaultBuilder(args)
+    .ConfigureServices((hostContext, services) =>
     {
-        options.UseSqlite(connectionString);
-    }
-    else
-    {
-        options.UseSqlServer(connectionString);
-    }
-});
+        var connectionString = hostContext.Configuration.GetConnectionString("AgentRegistryConnection") 
+            ?? "Server=localhost;Database=AgentRegistryDb;Trusted_Connection=True;TrustServerCertificate=True;";
 
-// Register Services
-builder.Services.AddScoped<IAgentRegistryService, AgentRegistryService>();
-builder.Services.AddScoped<IHumanTaskService, HumanTaskService>();
-builder.Services.AddScoped<IDatabaseQueueService, DatabaseQueueService>();
-builder.Services.AddHttpClient<IMcpHttpClient, StreamableMcpHttpClient>();
-builder.Services.AddHttpClient();
-builder.Services.AddScoped<ITaskPlanner, TaskPlannerService>();
+        services.AddDbContext<AgentRegistryDbContext>(options =>
+        {
+            if (connectionString.Contains("Data Source=") && connectionString.EndsWith(".db"))
+            {
+                options.UseSqlite(connectionString);
+            }
+            else
+            {
+                options.UseSqlServer(connectionString);
+            }
+        });
 
-// Register Central Orchestrator Database Queue Worker
-builder.Services.AddHostedService<OrchestratorQueueWorker>();
+        // Core Orchestration Services
+        services.AddScoped<IAgentRegistryService, AgentRegistryService>();
+        services.AddScoped<IHumanTaskService, HumanTaskService>();
+        services.AddScoped<IDatabaseQueueService, DatabaseQueueService>();
+        services.AddHttpClient<IMcpHttpClient, StreamableMcpHttpClient>();
+        services.AddHttpClient();
+        services.AddScoped<ITaskPlanner, TaskPlannerService>();
 
-builder.Services.AddEndpointsApiExplorer();
+        // Pure Database Queue Worker Service (Zero HTTP / WebAPI)
+        services.AddHostedService<OrchestratorQueueWorker>();
+    })
+    .Build();
 
-var app = builder.Build();
-
-// Ensure Database is created and all required tables exist
-using (var scope = app.Services.CreateScope())
+// Ensure Database & all required SQL Server tables exist on startup
+using (var scope = host.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AgentRegistryDbContext>();
+    var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
+
+    logger.LogInformation("Central Orchestrator starting up in 100% Pure Disconnected Worker Mode (Zero WebAPI)...");
     dbContext.Database.EnsureCreated();
 
-    // Ensure HumanTasks, InboundEvents, and AgentTasks tables exist in existing database
     if (dbContext.Database.IsSqlServer())
     {
         dbContext.Database.ExecuteSqlRaw(@"
@@ -102,16 +105,4 @@ using (var scope = app.Services.CreateScope())
     await registry.SeedDefaultAgentsAsync();
 }
 
-app.MapGet("/", () => Results.Ok(new {
-    service = "Central Orchestrator Agent (.NET 10 LTS)",
-    architecture = "100% Disconnected Database-Driven Event Bus & Task Queue",
-    database = "Microsoft SQL Server (AgentRegistryDb)",
-    status = "Online",
-    timestamp = DateTimeOffset.UtcNow
-}));
-
-app.MapEventEndpoints();
-app.MapRegistryEndpoints();
-app.MapTaskEndpoints();
-
-app.Run();
+await host.RunAsync();

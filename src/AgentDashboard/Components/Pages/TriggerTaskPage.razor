@@ -1,6 +1,7 @@
 @page "/trigger"
 @rendermode InteractiveServer
-@inject HttpClient Http
+@using CentralOrchestrator.Services
+@inject IDatabaseQueueService QueueService
 
 <PageTitle>Trigger Event - Agent Dashboard</PageTitle>
 
@@ -134,15 +135,11 @@
                 DataJson: jsonData
             );
 
-            var res = await Http.PostAsJsonAsync("api/events/enqueue", req);
-            if (res.IsSuccessStatusCode)
+            var eventDto = await QueueService.CreateInboundEventAsync(req);
+            if (eventDto != null)
             {
-                var eventDto = await res.Content.ReadFromJsonAsync<InboundEventDto>();
-                if (eventDto != null)
-                {
-                    activeEventGuid = eventDto.EventGuid;
-                    await PollEventTasks();
-                }
+                activeEventGuid = eventDto.EventGuid;
+                await PollEventTasks();
             }
         }
         catch (Exception ex)
@@ -160,7 +157,7 @@
         if (activeEventGuid == null) return;
         try
         {
-            eventTasks = await Http.GetFromJsonAsync<List<AgentTaskDto>>($"api/events/queue/{activeEventGuid}/tasks");
+            eventTasks = await QueueService.GetTasksForEventAsync(activeEventGuid);
         }
         catch (Exception ex)
         {

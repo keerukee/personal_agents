@@ -1,17 +1,34 @@
 using AgentDashboard.Components;
+using CentralOrchestrator.Data;
+using CentralOrchestrator.Services;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add Blazor Server services
+// Configure Direct SQL Server DbContext connection
+var connectionString = builder.Configuration.GetConnectionString("AgentRegistryConnection") 
+    ?? "Server=localhost;Database=AgentRegistryDb;Trusted_Connection=True;TrustServerCertificate=True;";
+
+builder.Services.AddDbContext<AgentRegistryDbContext>(options =>
+{
+    if (connectionString.Contains("Data Source=") && connectionString.EndsWith(".db"))
+    {
+        options.UseSqlite(connectionString);
+    }
+    else
+    {
+        options.UseSqlServer(connectionString);
+    }
+});
+
+// Register Core Database Services directly in Blazor Server
+builder.Services.AddScoped<IAgentRegistryService, AgentRegistryService>();
+builder.Services.AddScoped<IHumanTaskService, HumanTaskService>();
+builder.Services.AddScoped<IDatabaseQueueService, DatabaseQueueService>();
+
+// Add Blazor Server Interactive Component Services
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
-
-// Configure HttpClient pointing to Central Orchestrator API
-var orchestratorBaseUrl = builder.Configuration["OrchestratorApiUrl"] ?? "http://localhost:5000";
-builder.Services.AddScoped(sp => new HttpClient
-{
-    BaseAddress = new Uri(orchestratorBaseUrl)
-});
 
 var app = builder.Build();
 

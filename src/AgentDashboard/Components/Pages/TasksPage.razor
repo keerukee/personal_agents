@@ -1,7 +1,8 @@
 @page "/"
 @page "/tasks"
 @rendermode InteractiveServer
-@inject HttpClient Http
+@using CentralOrchestrator.Services
+@inject IHumanTaskService TaskService
 
 <PageTitle>Human Action Items - Agent Dashboard</PageTitle>
 
@@ -27,7 +28,7 @@
 {
     <div class="text-center my-5">
         <div class="spinner-border text-primary" role="status"></div>
-        <p class="mt-2 text-muted">Loading tasks from Central Orchestrator...</p>
+        <p class="mt-2 text-muted">Loading tasks directly from SQL Server DB...</p>
     </div>
 }
 else if (tasks == null || tasks.Count == 0)
@@ -145,8 +146,7 @@ else
         isLoading = true;
         try
         {
-            var url = string.IsNullOrEmpty(selectedStatus) ? "api/tasks" : $"api/tasks?status={selectedStatus}";
-            tasks = await Http.GetFromJsonAsync<List<HumanTaskDto>>(url);
+            tasks = await TaskService.GetTasksAsync(selectedStatus);
         }
         catch (Exception ex)
         {
@@ -167,13 +167,13 @@ else
 
     private async Task UpdateStatus(int id, string newStatus)
     {
-        await Http.PutAsJsonAsync($"api/tasks/{id}/status", new UpdateTaskStatusRequest(newStatus));
+        await TaskService.UpdateTaskStatusAsync(id, new UpdateTaskStatusRequest(newStatus));
         await LoadTasks();
     }
 
     private async Task DeleteTask(int id)
     {
-        await Http.DeleteAsync($"api/tasks/{id}");
+        await TaskService.DeleteTaskAsync(id);
         await LoadTasks();
     }
 
@@ -197,7 +197,7 @@ else
             Priority: newTask.Priority
         );
 
-        await Http.PostAsJsonAsync("api/tasks", req);
+        await TaskService.CreateTaskAsync(req);
         showNewTaskModal = false;
         await LoadTasks();
     }

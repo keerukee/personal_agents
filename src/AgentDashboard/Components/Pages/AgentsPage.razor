@@ -1,13 +1,14 @@
 @page "/agents"
 @rendermode InteractiveServer
-@inject HttpClient Http
+@using CentralOrchestrator.Services
+@inject IAgentRegistryService RegistryService
 
 <PageTitle>Dynamic Agent Registry - Agent Dashboard</PageTitle>
 
 <div class="d-flex justify-content-between align-items-center mb-4">
     <div>
         <h2 class="fw-bold mb-1"><i class="bi bi-robot text-info me-2"></i>Dynamic Agent Registry</h2>
-        <p class="text-muted mb-0">Register, manage, and inspect sub-agents and capabilities dynamically at runtime.</p>
+        <p class="text-muted mb-0">Register, manage, and inspect sub-agents and capabilities directly in SQL Server DB.</p>
     </div>
     <div class="d-flex gap-2">
         <button class="btn btn-outline-secondary" @onclick="SeedDefaultAgents">
@@ -23,7 +24,7 @@
 {
     <div class="text-center my-5">
         <div class="spinner-border text-info" role="status"></div>
-        <p class="mt-2 text-muted">Loading registered agents from SQL Server DB...</p>
+        <p class="mt-2 text-muted">Loading registered agents directly from SQL Server DB...</p>
     </div>
 }
 else if (agents == null || agents.Count == 0)
@@ -117,15 +118,15 @@ else
 
                     <div class="row">
                         <div class="col-8 mb-3">
-                            <label class="form-label fw-semibold">Endpoint URL</label>
+                            <label class="form-label fw-semibold">Endpoint / Identification URL</label>
                             <input type="text" class="form-control" @bind="newAgent.EndpointUrl" placeholder="http://localhost:5001/mcp" />
                         </div>
                         <div class="col-4 mb-3">
                             <label class="form-label fw-semibold">Transport Protocol</label>
                             <select class="form-select" @bind="newAgent.TransportType">
+                                <option value="DatabaseQueue">DatabaseQueue</option>
                                 <option value="StreamableHttpMcp">StreamableHttpMcp</option>
                                 <option value="PythonFastApi">PythonFastApi</option>
-                                <option value="RestApi">RestApi</option>
                             </select>
                         </div>
                     </div>
@@ -185,7 +186,7 @@ else
         isLoading = true;
         try
         {
-            agents = await Http.GetFromJsonAsync<List<AgentRegistration>>("api/registry/agents");
+            agents = await RegistryService.GetAllActiveAgentsAsync();
         }
         catch (Exception ex)
         {
@@ -200,13 +201,13 @@ else
 
     private async Task DeactivateAgent(string id)
     {
-        await Http.DeleteAsync($"api/registry/agents/{id}");
+        await RegistryService.DeactivateAgentAsync(id);
         await LoadAgents();
     }
 
     private async Task SeedDefaultAgents()
     {
-        await Http.PostAsync("api/registry/seed", null);
+        await RegistryService.SeedDefaultAgentsAsync();
         await LoadAgents();
     }
 
@@ -239,7 +240,7 @@ else
             Capabilities: newAgent.Capabilities
         );
 
-        await Http.PostAsJsonAsync("api/registry/agents", req);
+        await RegistryService.RegisterOrUpdateAgentAsync(req);
         showAddModal = false;
         await LoadAgents();
     }
@@ -250,7 +251,7 @@ else
         public string Name { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
         public string EndpointUrl { get; set; } = "http://localhost:5000";
-        public string TransportType { get; set; } = "StreamableHttpMcp";
+        public string TransportType { get; set; } = "DatabaseQueue";
         public List<AgentCapabilityDto> Capabilities { get; set; } = new();
     }
 }
