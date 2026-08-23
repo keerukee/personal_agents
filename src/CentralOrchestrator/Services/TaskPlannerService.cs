@@ -1,3 +1,4 @@
+using CentralOrchestrator.Services.AI;
 using Common.Contracts;
 using Microsoft.Extensions.AI;
 using System.Text;
@@ -10,6 +11,7 @@ public class TaskPlannerService : ITaskPlanner
     private readonly IAgentRegistryService _agentRegistry;
     private readonly IMcpHttpClient _mcpClient;
     private readonly HttpClient _httpClient;
+    private readonly IAiProviderFactory? _aiProviderFactory;
     private readonly IChatClient? _chatClient;
     private readonly ILogger<TaskPlannerService> _logger;
 
@@ -24,11 +26,13 @@ public class TaskPlannerService : ITaskPlanner
         IMcpHttpClient mcpClient,
         HttpClient httpClient,
         ILogger<TaskPlannerService> logger,
+        IAiProviderFactory? aiProviderFactory = null,
         IChatClient? chatClient = null)
     {
         _agentRegistry = agentRegistry;
         _mcpClient = mcpClient;
         _httpClient = httpClient;
+        _aiProviderFactory = aiProviderFactory;
         _chatClient = chatClient;
         _logger = logger;
     }
@@ -67,13 +71,30 @@ public class TaskPlannerService : ITaskPlanner
 
         List<TaskStep> plannedSteps;
 
-        // 3. Use LLM if IChatClient is available, otherwise perform dynamic capability matching
-        if (_chatClient != null)
+        // 3. Use active LLM Provider via IAiProviderFactory or IChatClient, otherwise perform dynamic capability matching
+        var llmProvider = _aiProviderFactory?.GetLlmProvider();
+        if (llmProvider != null)
+        {
+            _logger.LogInformation("Using active LLM Provider '{ProviderName}' ({Environment}) to evaluate event and generate DAG task plan", 
+                llmProvider.ProviderName, _aiProviderFactory?.ActiveEnvironment);
+            
+            try
+            {
+                plannedSteps = await PlanWithLlmProviderAsync(eventMessage, agentContextBuilder.ToString(), activeAgents, llmProvider, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "LLM provider planning failed. Falling back to dynamic capability matching.");
+                plannedSteps = PlanWithCapabilityMatching(eventMessage, activeAgents);
+            }
+        }
+        else if (_chatClient != null)
         {
             plannedSteps = await PlanWithLlmAsync(eventMessage, agentContextBuilder.ToString(), activeAgents, cancellationToken);
         }
         else
         {
+            _logger.LogInformation("No active LLM ChatClient/Provider found. Performing dynamic capability matching fallback.");
             plannedSteps = PlanWithCapabilityMatching(eventMessage, activeAgents);
         }
 
@@ -84,6 +105,74 @@ public class TaskPlannerService : ITaskPlanner
             Steps: plannedSteps,
             Status: "Created"
         );
+    }
+
+    private async Task<List<TaskStep>> PlanWithLlmProviderAsync(
+        AgentEventMessage eventMessage,
+        string agentContext,
+        List<AgentRegistration> activeAgents,
+        ILlmProvider llmProvider,
+        CancellationToken cancellationToken)
+    {
+        var systemPrompt = $@"You are a Central Orchestrator Agent. Your job is to analyze unread emails and determine if they require an automated action or response from our personal multi-agent platform.
+
+Available Sub-Agents Registry:
+{agentContext}
+
+Instructions:
+1. FIRST, evaluate if the email requires an automated response or action. If the email is a promotional ad, newsletter, receipt, marketing, or no-reply notification that does NOT require an action or reply, return an EMPTY JSON array `[]`.
+2. If an automated action or response IS required, select which sub-agents to invoke to fulfill the request.
+3. Output ONLY a valid JSON array of step objects:
+[
+  {{
+    ""stepId"": 1,
+    ""agentId"": ""target-agent-id"",
+    ""action"": ""capability_action_name"",
+    ""parameters"": {{ ""key"": ""value"" }},
+    ""dependsOn"": []
+  }}
+]";
+
+        var userPrompt = $"Event Source: {eventMessage.Source}\nPrompt: {eventMessage.Prompt}\nPayload Data: {eventMessage.Data.GetRawText()}";
+
+        var response = await llmProvider.CompleteAsync(new LlmCompletionRequest(
+            Prompt: userPrompt,
+            SystemInstruction: systemPrompt,
+            Temperature: 0.1f,
+            MaxTokens: 1000
+        ), cancellationToken);
+
+        var jsonText = response.ResponseText ?? string.Empty;
+        _logger.LogInformation("LLM Raw Response: {ResponseText}", jsonText);
+
+        if (jsonText.Contains("```json"))
+        {
+            jsonText = jsonText.Split("```json")[1].Split("```")[0].Trim();
+        }
+        else if (jsonText.Contains("```"))
+        {
+            jsonText = jsonText.Split("```")[1].Split("```")[0].Trim();
+        }
+
+        var steps = JsonSerializer.Deserialize<List<TaskStep>>(jsonText, JsonOptions);
+
+        if (steps != null && steps.Count > 0)
+        {
+            var orderedSteps = steps
+                .OrderByDescending(s => s.Action.Contains("query") || s.Action.Contains("analyze") || s.AgentId.Contains("data"))
+                .ToList();
+
+            var finalSteps = new List<TaskStep>();
+            for (int i = 0; i < orderedSteps.Count; i++)
+            {
+                int currentStepId = i + 1;
+                var dependsOnList = i > 0 ? new List<int> { i } : new List<int>();
+                finalSteps.Add(orderedSteps[i] with { StepId = currentStepId, DependsOn = dependsOnList });
+            }
+            return finalSteps;
+        }
+
+        return steps ?? new List<TaskStep>();
     }
 
     private async Task<List<TaskStep>> PlanWithLlmAsync(
