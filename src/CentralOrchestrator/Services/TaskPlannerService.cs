@@ -149,102 +149,20 @@ Instructions:
         var steps = new List<TaskStep>();
         var promptLower = eventMessage.Prompt.ToLower();
 
-        // 1. Evaluate if this email requires an automated response or action
-        bool isAgentRequest = promptLower.Contains("report") ||
-                              promptLower.Contains("patient") ||
-                              promptLower.Contains("database") ||
-                              promptLower.Contains("mysql") ||
-                              promptLower.Contains("sql") ||
-                              promptLower.Contains("send") ||
-                              promptLower.Contains("fetch") ||
-                              promptLower.Contains("query") ||
-                              promptLower.Contains("task") ||
-                              promptLower.Contains("please");
-
-        if (!isAgentRequest)
-        {
-            _logger.LogInformation("Evaluator: Inbound email does NOT require an automated agent response. Skipping task creation.");
-            return steps; // Returns empty list (0 tasks created)
-        }
-
-        // 2. Dynamically resolve registered database & email agents from activeAgents DB registry
-        if (promptLower.Contains("patient") || promptLower.Contains("lab") || promptLower.Contains("mysql"))
-        {
-            var mysqlAgent = activeAgents.FirstOrDefault(a => a.Capabilities.Any(c => c.CapabilityName == "query_labreports_db"))
-                          ?? activeAgents.FirstOrDefault(a => a.Description.Contains("lab", StringComparison.OrdinalIgnoreCase) || a.Name.Contains("MySQL", StringComparison.OrdinalIgnoreCase));
-            
-            var emailAgent = activeAgents.FirstOrDefault(a => a.Capabilities.Any(c => c.CapabilityName == "send_email" || c.CapabilityName == "send_reply"))
-                          ?? activeAgents.FirstOrDefault(a => a.Description.Contains("email", StringComparison.OrdinalIgnoreCase) || a.Name.Contains("Outlook", StringComparison.OrdinalIgnoreCase));
-
-            string mysqlAgentId = mysqlAgent?.Id ?? "mysql-data-agent";
-            string mysqlAction = mysqlAgent?.Capabilities.FirstOrDefault()?.CapabilityName ?? "query_labreports_db";
-
-            string emailAgentId = emailAgent?.Id ?? "outlook-email-agent";
-            string emailAction = emailAgent?.Capabilities.FirstOrDefault()?.CapabilityName ?? "send_email";
-
-            var mysqlParams = new Dictionary<string, object>();
-            if (eventMessage.Data.ValueKind == JsonValueKind.Object)
-            {
-                foreach (var prop in eventMessage.Data.EnumerateObject())
-                {
-                    mysqlParams[prop.Name] = prop.Value.ToString();
-                }
-            }
-            mysqlParams["prompt"] = eventMessage.Prompt;
-
-            if (promptLower.Contains("female") || promptLower.Contains("woman") || promptLower.Contains("women"))
-            {
-                mysqlParams["genderFilter"] = "Female";
-            }
-            else if (promptLower.Contains("male") || promptLower.Contains("man") || promptLower.Contains("men"))
-            {
-                mysqlParams["genderFilter"] = "Male";
-            }
-
-            // Step 1: Query database (Agent ID dynamically pulled from DB registry)
-            steps.Add(new TaskStep(
-                StepId: 1,
-                AgentId: mysqlAgentId,
-                Action: mysqlAction,
-                Parameters: mysqlParams,
-                DependsOn: new List<int>(),
-                Status: "Pending",
-                ResultOutput: null
-            ));
-
-            // Step 2: Send extracted report via email (Agent ID dynamically pulled from DB registry)
-            var emailParams = new Dictionary<string, object>(mysqlParams);
-            if (eventMessage.Data.TryGetProperty("sender", out var senderProp))
-            {
-                emailParams["to"] = senderProp.GetString() ?? "keerukee@outlook.com";
-            }
-            if (eventMessage.Data.TryGetProperty("subject", out var subjProp))
-            {
-                emailParams["subject"] = $"Re: {subjProp.GetString()}";
-            }
-
-            steps.Add(new TaskStep(
-                StepId: 2,
-                AgentId: emailAgentId,
-                Action: emailAction,
-                Parameters: emailParams,
-                DependsOn: new List<int> { 1 },
-                Status: "Pending",
-                ResultOutput: null
-            ));
-
-            return steps;
-        }
-
         int stepIdCounter = 1;
+        int lastStepId = 0;
+
         foreach (var agent in activeAgents)
         {
             foreach (var cap in agent.Capabilities)
             {
                 var capNameLower = cap.CapabilityName.ToLower();
                 var capDescLower = cap.Description.ToLower();
+                var agentDescLower = agent.Description.ToLower();
 
-                bool matches = promptLower.Split(' ').Any(word => word.Length > 4 && (capNameLower.Contains(word) || capDescLower.Contains(word)));
+                // Match request intent dynamically against registered agent descriptions and capability actions
+                bool matches = promptLower.Split(' ', ',', '.', ':', '\n', '\r', '-').Any(word => 
+                    word.Length > 3 && (capNameLower.Contains(word) || capDescLower.Contains(word) || agentDescLower.Contains(word)));
 
                 if (matches)
                 {
@@ -258,15 +176,29 @@ Instructions:
                     }
                     parameters["prompt"] = eventMessage.Prompt;
 
+                    if (promptLower.Contains("female") || promptLower.Contains("woman") || promptLower.Contains("women"))
+                    {
+                        parameters["genderFilter"] = "Female";
+                    }
+                    else if (promptLower.Contains("male") || promptLower.Contains("man") || promptLower.Contains("men"))
+                    {
+                        parameters["genderFilter"] = "Male";
+                    }
+
+                    var dependsOnList = lastStepId > 0 ? new List<int> { lastStepId } : new List<int>();
+                    int currentStepId = stepIdCounter++;
+
                     steps.Add(new TaskStep(
-                        StepId: stepIdCounter++,
+                        StepId: currentStepId,
                         AgentId: agent.Id,
                         Action: cap.CapabilityName,
                         Parameters: parameters,
-                        DependsOn: steps.Select(s => s.StepId).ToList(),
+                        DependsOn: dependsOnList,
                         Status: "Pending",
                         ResultOutput: null
                     ));
+
+                    lastStepId = currentStepId;
                     break;
                 }
             }
