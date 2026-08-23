@@ -1,10 +1,10 @@
-# Event-Driven Multi-Agent Platform (100% Pure Disconnected Architecture - Zero WebAPI)
+# Event-Driven Multi-Agent Platform (Pure Disconnected Architecture & Hybrid Home/Office AI Switcher)
 
 A production-ready, modular, event-driven Multi-Agent System targeting **.NET 10 (LTS) with C# 14** for core orchestration, micro-agents, and interactive Blazor dashboard, combined with **Python (`pywin32` / COM)** for local Outlook desktop automation and dynamic script execution.
 
 ---
 
-## 🏛️ Pure Disconnected System Architecture
+## 🏛️ Pure Disconnected System Architecture & Hybrid AI Switcher
 
 ```
 [ Local Outlook Desktop App (MAPI) ]
@@ -25,11 +25,47 @@ A production-ready, modular, event-driven Multi-Agent System targeting **.NET 10
 │ (Polls InboundEvents)             │ (Creates & Monitors AgentTasks) │ (Direct DB Access)
 ▼                                   ▼                                 │
 [ Central Orchestrator Worker (Pure .NET 10 Worker - Zero WebAPI) ]────┤
-                                                                      │
+  │                                                                   │
+  ├──► [ Hybrid AI Provider Factory (AiProviderFactory) ]             │
+  │     ├── Home Mode: Google Gemini API & Google Document AI         │
+  │     └── Office Mode: Azure AI Foundry & Azure Document Intel      │
+  │                                                                   │
 [ SqlDataAgent Worker (.NET 10) ] ────── (Polls & Updates AgentTasks)  │
                                                                       │
 [ Interactive Blazor Server Dashboard (.NET 10) ] ────────────────────┘
   (Direct SQL Server DbContext Connection)
+```
+
+---
+
+## 🏡 Home vs. 🏢 Office AI Provider Switching
+
+Easily switch AI providers for LLM completions and Document Intelligence between **Home (Google Cloud / Gemini)** and **Office (Azure Enterprise)** using configuration key `"AiSettings:Environment"`:
+
+### 1. Home Mode (`"AiSettings:Environment": "Home"`)
+- **LLM Completions**: Google Gemini API (`GoogleGeminiLlmProvider` using `gemini-2.5-flash`).
+- **Document Intelligence**: Google Document AI & Gemini Multimodal (`GoogleDocumentAiProvider`).
+
+### 2. Office Mode (`"AiSettings:Environment": "Office"`)
+- **LLM Completions**: Azure AI Foundry / Azure OpenAI (`AzureAiFoundryLlmProvider`).
+- **Document Intelligence**: Azure Document Intelligence / Form Recognizer (`AzureDocumentIntelligenceProvider`).
+
+```json
+{
+  "AiSettings": {
+    "Environment": "Home",
+    "Home": {
+      "GoogleApiKey": "YOUR_GEMINI_API_KEY",
+      "ModelName": "gemini-2.5-flash"
+    },
+    "Office": {
+      "AzureAiFoundryEndpoint": "https://your-foundry-endpoint.services.ai.azure.com/models",
+      "AzureAiFoundryApiKey": "YOUR_AZURE_KEY",
+      "AzureDocIntelEndpoint": "https://your-doc-intel.cognitiveservices.azure.com/",
+      "AzureDocIntelApiKey": "YOUR_DOC_INTEL_KEY"
+    }
+  }
+}
 ```
 
 ---
@@ -47,42 +83,23 @@ A production-ready, modular, event-driven Multi-Agent System targeting **.NET 10
 ### 1. `src/CentralOrchestrator` (.NET 10 LTS Pure Worker Service)
 - **Role**: Core orchestration engine & database event bus processor (no Kestrel/WebAPI).
 - **Key Features**:
-  - `Program.cs`: Built using `.NET Host.CreateDefaultBuilder()` as a pure Windows / Background Worker Service.
+  - `AiProviderFactory.cs`: Dynamically resolves `GoogleGeminiLlmProvider` vs. `AzureAiFoundryLlmProvider` and `GoogleDocumentAiProvider` vs. `AzureDocumentIntelligenceProvider`.
   - `OrchestratorQueueWorker.cs`: `BackgroundService` polling `InboundEvents` where `Status = 'Pending'`.
-  - `ITaskPlanner`: Uses `Microsoft.Extensions.AI` (`IChatClient`) to dynamically match input prompts against registered agent capabilities in SQL Server and decompose events into child `AgentTasks`.
 
 ### 2. `src/AgentDashboard` (.NET 10 Blazor Server Web App)
 - **Role**: Interactive management dashboard connected directly to SQL Server.
-- **Key Pages**:
-  - `TasksPage.razor`: View & manage Action Items via direct `IHumanTaskService` database operations.
-  - `AgentsPage.razor`: Dynamic Agent Registry Manager via direct `IAgentRegistryService`.
-  - `TriggerTaskPage.razor`: Enqueues prompts directly into `InboundEvents` via direct `IDatabaseQueueService`.
 
 ### 3. `src/Agents/SqlDataAgent` (.NET 10 Worker)
 - **Role**: SQL query execution micro-agent.
-- **Key Features**: `SqlQueueWorker.cs` background service polling `AgentTasks` where `TargetAgentId = 'sql-data-agent'`, executing queries safely, and returning Markdown table results into SQL Server.
 
 ### 4. `src/Agents/OutlookEmailAgent` (Python Desktop Agent)
 - **Role**: Local desktop Outlook bridge (**Zero Graph API & Zero SMTP**).
-- **Key Features**:
-  - `main.py` inbox watcher inserting unread MAPI emails directly into `InboundEvents` table.
-  - Outbound queue worker polling `AgentTasks` where `TargetAgentId = 'outlook-email-agent'`, executing `win32com.client` send/reply operations, and updating task status to `'Completed'`.
 
 ### 5. `src/Common/Contracts` (.NET 10 Class Library)
-- **Key Models**: `DatabaseQueueModels.cs` (`InboundEventDto`, `AgentTaskDto`, `CreateInboundEventRequest`, `UpdateTaskResultRequest`).
+- **Key Models**: `DatabaseQueueModels.cs`, `AiProviderModels.cs` (`LlmCompletionRequest`, `DocumentAnalysisRequest`).
 
 ### 6. `tests/CentralOrchestrator.Tests` (.NET 10 XUnit Test Suite)
-- Passed **10 / 10 automated unit tests**.
-
----
-
-## 🗄️ Database Schema (Microsoft SQL Server `AgentRegistryDb`)
-
-1. **`InboundEvents`**: `Id` (PK), `EventGuid` (UNIQUE), `Source`, `Prompt`, `DataJson`, `Status`, `CreatedAt`, `ProcessedAt`.
-2. **`AgentTasks`**: `Id` (PK), `TaskGuid` (UNIQUE), `ParentEventGuid` (FK), `StepOrder`, `TargetAgentId`, `Action`, `PayloadJson`, `Status`, `ResultJson`, `ErrorMessage`, `CreatedAt`, `StartedAt`, `CompletedAt`.
-3. **`Agents`**: `Id` (PK), `Name`, `Description`, `TransportType`, `IsActive`, `RegisteredAt`, `LastHeartbeat`.
-4. **`AgentCapabilities`**: `Id` (PK), `AgentId` (FK), `CapabilityName`, `Description`, `ParametersJsonSchema`.
-5. **`HumanTasks`**: `Id` (PK), `EventId`, `Title`, `Description`, `AssignedAgentId`, `Status`, `Priority`, `CreatedAt`, `CompletedAt`.
+- Passed **12 / 12 automated unit tests**.
 
 ---
 

@@ -1,5 +1,6 @@
 using CentralOrchestrator.Data;
 using CentralOrchestrator.Services;
+using CentralOrchestrator.Services.AI;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -24,6 +25,13 @@ var host = Host.CreateDefaultBuilder(args)
             }
         });
 
+        // Register Home (Google Gemini) & Office (Azure AI Foundry) Providers
+        services.AddHttpClient<GoogleGeminiLlmProvider>();
+        services.AddHttpClient<GoogleDocumentAiProvider>();
+        services.AddHttpClient<AzureAiFoundryLlmProvider>();
+        services.AddHttpClient<AzureDocumentIntelligenceProvider>();
+        services.AddSingleton<IAiProviderFactory, AiProviderFactory>();
+
         // Core Orchestration Services
         services.AddScoped<IAgentRegistryService, AgentRegistryService>();
         services.AddScoped<IHumanTaskService, HumanTaskService>();
@@ -41,9 +49,15 @@ var host = Host.CreateDefaultBuilder(args)
 using (var scope = host.Services.CreateScope())
 {
     var dbContext = scope.ServiceProvider.GetRequiredService<AgentRegistryDbContext>();
+    var aiFactory = scope.ServiceProvider.GetRequiredService<IAiProviderFactory>();
     var logger = scope.ServiceProvider.GetRequiredService<ILogger<Program>>();
 
     logger.LogInformation("Central Orchestrator starting up in 100% Pure Disconnected Worker Mode (Zero WebAPI)...");
+    logger.LogInformation("Active AI Environment Mode: '{Environment}' (LLM: {LlmProvider}, DocIntel: {DocProvider})",
+        aiFactory.ActiveEnvironment,
+        aiFactory.GetLlmProvider().ProviderName,
+        aiFactory.GetDocumentIntelligenceProvider().ProviderName);
+
     dbContext.Database.EnsureCreated();
 
     if (dbContext.Database.IsSqlServer())
