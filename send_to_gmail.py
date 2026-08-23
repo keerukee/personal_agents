@@ -4,12 +4,13 @@ import mysql.connector
 import json
 from datetime import datetime
 
-def send_real_labreports_to_gmail():
+def send_female_reports_to_gmail():
     pythoncom.CoInitialize()
     try:
         conn = mysql.connector.connect(host='localhost', port=3306, user='root', password='root')
         cursor = conn.cursor()
 
+        # Query last 5 FEMALE lab reports from labreports & patients_info
         query = """
             SELECT 
                 lr.PatientPID,
@@ -22,9 +23,10 @@ def send_real_labreports_to_gmail():
                 ai.Diagnostic,
                 ai.PatientAdvice
             FROM labreports.lab_report lr
-            LEFT JOIN (
+            INNER JOIN (
                 SELECT DISTINCT PatientId, FirstName, LastName, AgeYears, HospitalName 
                 FROM patients_info.vw_hospitalpatientcurrent
+                WHERE SexAtBirth = 1 OR SexAtBirth = '1' OR SexAtBirth = 'Female' OR SexAtBirth = 'F'
             ) p ON lr.PatientPID = p.PatientId
             LEFT JOIN labreports.lab_report_ai ai ON lr.ReportId = ai.ReportId
             ORDER BY lr.CreatedAt DESC
@@ -37,12 +39,12 @@ def send_real_labreports_to_gmail():
         conn.close()
 
         html_lines = [
-            "<h2>🏥 REAL MySQL Patient Lab Reports & AI Diagnostic Summary</h2>",
-            "<p><b>Databases Joined:</b> <code>labreports.lab_report</code> ⟗ <code>patients_info.vw_hospitalpatientcurrent</code></p>",
+            "<h2>👩‍⚕️ REAL MySQL Lab Reports — Last 5 Female Patients Summary</h2>",
+            "<p><b>Databases Joined:</b> <code>labreports.lab_report</code> ⟗ <code>patients_info.vw_hospitalpatientcurrent</code> (Filter: <code>SexAtBirth = Female</code>)</p>",
             f"<p><b>Query Time:</b> {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC</p>",
             "<table border='1' cellpadding='8' cellspacing='0' style='border-collapse: collapse; font-family: Arial, sans-serif;'>",
-            "<tr style='background-color: #0078D4; color: white;'>",
-            "<th>#</th><th>Real Patient Name</th><th>Age</th><th>Hospital</th><th>Reported Date</th><th>Key Lab Tests & Abnormal Values</th>",
+            "<tr style='background-color: #D13438; color: white;'>",
+            "<th>#</th><th>Female Patient Name</th><th>Age</th><th>Hospital</th><th>Reported Date</th><th>Key Lab Tests & Reference Ranges</th>",
             "</tr>"
         ]
 
@@ -71,7 +73,7 @@ def send_real_labreports_to_gmail():
             except Exception:
                 pass
 
-            test_summary = "<br/>".join(test_list[:4]) if test_list else "Lab record processed"
+            test_summary = "<br/>".join(test_list[:5]) if test_list else "Lab record processed"
 
             html_lines.append(f"<tr><td>{idx}</td><td><b>{full_name}</b></td><td>{age_str}</td><td>{hosp_str}</td><td>{date_str}</td><td>{test_summary}</td></tr>")
 
@@ -83,15 +85,15 @@ def send_real_labreports_to_gmail():
         outlook = win32com.client.Dispatch("Outlook.Application")
         mail = outlook.CreateItem(0) # 0 = olMailItem
         mail.To = "keerukee@gmail.com"
-        mail.Subject = "REAL Patient Lab Reports Summary - MySQL Database Query Result"
+        mail.Subject = "Last 5 Female Patient Lab Reports - Real MySQL Query Result"
         mail.HTMLBody = html_body
         mail.Send()
 
-        print(f"[Outlook Success] Successfully sent REAL Patient Lab Reports email to 'keerukee@gmail.com'!")
+        print(f"[Outlook Success] Successfully sent Last 5 Female Patient Lab Reports to 'keerukee@gmail.com'!")
     except Exception as e:
         print(f"[Outlook Error] {e}")
     finally:
         pythoncom.CoUninitialize()
 
 if __name__ == "__main__":
-    send_real_labreports_to_gmail()
+    send_female_reports_to_gmail()
