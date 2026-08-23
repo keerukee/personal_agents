@@ -13,6 +13,8 @@ public class AgentRegistryDbContext : DbContext
     public DbSet<AgentEntity> Agents => Set<AgentEntity>();
     public DbSet<AgentCapabilityEntity> Capabilities => Set<AgentCapabilityEntity>();
     public DbSet<HumanTaskEntity> HumanTasks => Set<HumanTaskEntity>();
+    public DbSet<InboundEventEntity> InboundEvents => Set<InboundEventEntity>();
+    public DbSet<AgentTaskEntity> AgentTasks => Set<AgentTaskEntity>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -40,6 +42,29 @@ public class AgentRegistryDbContext : DbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Title).IsRequired();
             entity.Property(e => e.Status).IsRequired();
+        });
+
+        modelBuilder.Entity<InboundEventEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.EventGuid).IsUnique();
+            entity.Property(e => e.Source).IsRequired();
+            entity.Property(e => e.Status).IsRequired();
+            entity.HasMany(e => e.Tasks)
+                  .WithOne()
+                  .HasForeignKey(t => t.ParentEventGuid)
+                  .HasPrincipalKey(e => e.EventGuid)
+                  .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<AgentTaskEntity>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.TaskGuid).IsUnique();
+            entity.HasIndex(e => e.TargetAgentId);
+            entity.HasIndex(e => e.Status);
+            entity.Property(e => e.TargetAgentId).IsRequired();
+            entity.Property(e => e.Action).IsRequired();
         });
     }
 }

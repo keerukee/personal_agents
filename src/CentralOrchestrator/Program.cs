@@ -5,7 +5,7 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Configure SQL Server / SQLite DbContext for Dynamic Agent Registry & Human Tasks
+// Configure SQL Server / SQLite DbContext for Dynamic Agent Registry & Database Queue
 var connectionString = builder.Configuration.GetConnectionString("AgentRegistryConnection") 
     ?? "Server=localhost;Database=AgentRegistryDb;Trusted_Connection=True;TrustServerCertificate=True;";
 
@@ -24,9 +24,13 @@ builder.Services.AddDbContext<AgentRegistryDbContext>(options =>
 // Register Services
 builder.Services.AddScoped<IAgentRegistryService, AgentRegistryService>();
 builder.Services.AddScoped<IHumanTaskService, HumanTaskService>();
+builder.Services.AddScoped<IDatabaseQueueService, DatabaseQueueService>();
 builder.Services.AddHttpClient<IMcpHttpClient, StreamableMcpHttpClient>();
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<ITaskPlanner, TaskPlannerService>();
+
+// Register Central Orchestrator Database Queue Worker
+builder.Services.AddHostedService<OrchestratorQueueWorker>();
 
 builder.Services.AddEndpointsApiExplorer();
 
@@ -38,7 +42,7 @@ using (var scope = app.Services.CreateScope())
     var dbContext = scope.ServiceProvider.GetRequiredService<AgentRegistryDbContext>();
     dbContext.Database.EnsureCreated();
 
-    // Ensure HumanTasks table exists in existing database
+    // Ensure HumanTasks, InboundEvents, and AgentTasks tables exist in existing database
     if (dbContext.Database.IsSqlServer())
     {
         dbContext.Database.ExecuteSqlRaw(@"
@@ -57,6 +61,40 @@ using (var scope = app.Services.CreateScope())
                     CONSTRAINT [PK_HumanTasks] PRIMARY KEY ([Id])
                 );
             END
+
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'InboundEvents')
+            BEGIN
+                CREATE TABLE [InboundEvents] (
+                    [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                    [EventGuid] NVARCHAR(450) NOT NULL UNIQUE,
+                    [Source] NVARCHAR(100) NOT NULL,
+                    [Prompt] NVARCHAR(MAX) NOT NULL,
+                    [DataJson] NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+                    [Status] NVARCHAR(50) NOT NULL DEFAULT 'Pending',
+                    [CreatedAt] DATETIMEOFFSET NOT NULL,
+                    [ProcessedAt] DATETIMEOFFSET NULL
+                );
+            END
+
+            IF NOT EXISTS (SELECT * FROM sys.tables WHERE name = 'AgentTasks')
+            BEGIN
+                CREATE TABLE [AgentTasks] (
+                    [Id] INT IDENTITY(1,1) PRIMARY KEY,
+                    [TaskGuid] NVARCHAR(450) NOT NULL UNIQUE,
+                    [ParentEventGuid] NVARCHAR(450) NOT NULL,
+                    [StepOrder] INT NOT NULL DEFAULT 1,
+                    [TargetAgentId] NVARCHAR(450) NOT NULL,
+                    [Action] NVARCHAR(100) NOT NULL,
+                    [PayloadJson] NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+                    [Status] NVARCHAR(50) NOT NULL DEFAULT 'Pending',
+                    [ResultJson] NVARCHAR(MAX) NULL,
+                    [ErrorMessage] NVARCHAR(MAX) NULL,
+                    [CreatedAt] DATETIMEOFFSET NOT NULL,
+                    [StartedAt] DATETIMEOFFSET NULL,
+                    [CompletedAt] DATETIMEOFFSET NULL,
+                    CONSTRAINT [FK_AgentTasks_InboundEvents] FOREIGN KEY ([ParentEventGuid]) REFERENCES [InboundEvents] ([EventGuid]) ON DELETE CASCADE
+                );
+            END
         ");
     }
 
@@ -66,8 +104,9 @@ using (var scope = app.Services.CreateScope())
 
 app.MapGet("/", () => Results.Ok(new {
     service = "Central Orchestrator Agent (.NET 10 LTS)",
-    status = "Online",
+    architecture = "100% Disconnected Database-Driven Event Bus & Task Queue",
     database = "Microsoft SQL Server (AgentRegistryDb)",
+    status = "Online",
     timestamp = DateTimeOffset.UtcNow
 }));
 

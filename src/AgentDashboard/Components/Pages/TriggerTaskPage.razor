@@ -5,15 +5,15 @@
 <PageTitle>Trigger Event - Agent Dashboard</PageTitle>
 
 <div class="mb-4">
-    <h2 class="fw-bold mb-1"><i class="bi bi-play-circle-fill text-success me-2"></i>Trigger Event / Test Prompt</h2>
-    <p class="text-muted mb-0">Dispatch a generic prompt to Central Orchestrator to test dynamic LLM routing & execution.</p>
+    <h2 class="fw-bold mb-1"><i class="bi bi-play-circle-fill text-success me-2"></i>Trigger DB Event / Test Prompt</h2>
+    <p class="text-muted mb-0">Enqueues a prompt directly into Microsoft SQL Server <code>InboundEvents</code> table for asynchronous orchestration.</p>
 </div>
 
 <div class="row">
-    <div class="col-lg-6 mb-4">
+    <div class="col-lg-5 mb-4">
         <div class="card border-0 shadow-sm">
             <div class="card-body">
-                <h5 class="fw-bold mb-3">Submit Prompt</h5>
+                <h5 class="fw-bold mb-3">Submit Disconnected DB Prompt</h5>
                 
                 <div class="mb-3">
                     <label class="form-label fw-semibold">Event Source</label>
@@ -22,69 +22,88 @@
 
                 <div class="mb-3">
                     <label class="form-label fw-semibold">User Prompt / Instructions</label>
-                    <textarea class="form-control" rows="4" @bind="promptText" placeholder="e.g. Please run sales database query for July 2026 and extract data"></textarea>
+                    <textarea class="form-control" rows="4" @bind="promptText" placeholder="e.g. Run sales database query for July 2026 and format report"></textarea>
                 </div>
 
                 <div class="mb-3">
-                    <label class="form-label fw-semibold">Extra JSON Payload (Optional)</label>
-                    <textarea class="form-control font-monospace fs-7" rows="3" @bind="jsonData" placeholder='{"subject": "Q3 Sales Analysis"}'></textarea>
+                    <label class="form-label fw-semibold">Extra JSON Data</label>
+                    <textarea class="form-control font-monospace fs-7" rows="3" @bind="jsonData" placeholder='{"subject": "Sales Analysis"}'></textarea>
                 </div>
 
                 <button class="btn btn-success w-100 py-2 d-flex align-items-center justify-content-center gap-2" @onclick="SubmitEvent" disabled="@isSubmitting">
                     @if (isSubmitting)
                     {
                         <span class="spinner-border spinner-border-sm" role="status"></span>
-                        <span>Planning & Executing DAG...</span>
+                        <span>Enqueuing to SQL Server...</span>
                     }
                     else
                     {
-                        <i class="bi bi-send-fill"></i>
-                        <span>Dispatch to Central Orchestrator</span>
+                        <i class="bi bi-database-fill-add"></i>
+                        <span>Enqueue Event into SQL Server</span>
                     }
                 </button>
             </div>
         </div>
     </div>
 
-    <div class="col-lg-6 mb-4">
+    <div class="col-lg-7 mb-4">
         <div class="card border-0 shadow-sm h-100">
-            <div class="card-header bg-white py-3">
-                <h5 class="fw-bold mb-0">Orchestrator Execution Plan Output</h5>
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <h5 class="fw-bold mb-0">Live Database Event & Task Progression</h5>
+                @if (activeEventGuid != null)
+                {
+                    <button class="btn btn-sm btn-outline-primary" @onclick="PollEventTasks">
+                        <i class="bi bi-arrow-clockwise"></i> Refresh Tasks
+                    </button>
+                }
             </div>
             <div class="card-body">
-                @if (executionResult == null)
+                @if (activeEventGuid == null)
                 {
                     <div class="text-center py-5 text-muted">
-                        <i class="bi bi-cpu display-4 d-block mb-2"></i>
-                        <span>Submit a prompt to view the generated DAG execution plan.</span>
+                        <i class="bi bi-database display-4 d-block mb-2"></i>
+                        <span>Enqueue an event to observe live SQL Server task queue progression.</span>
                     </div>
                 }
                 else
                 {
-                    <div class="alert alert-success d-flex justify-content-between align-items-center">
+                    <div class="alert alert-info d-flex justify-content-between align-items-center mb-3">
                         <div>
-                            <strong>Status:</strong> @executionResult.Status<br />
-                            <small>Plan ID: <code>@executionResult.PlanId</code></small>
+                            <strong>Active Event Guid:</strong> <code>@activeEventGuid</code><br />
+                            <small>Source: @eventSource</small>
                         </div>
-                        <span class="badge bg-success fs-6">@executionResult.Steps.Count Steps</span>
+                        <span class="badge bg-primary">Event Status: Active</span>
                     </div>
 
-                    <h6 class="fw-bold mb-2">Executed Steps:</h6>
-                    <div class="list-group">
-                        @foreach (var step in executionResult.Steps)
-                        {
-                            <div class="list-group-item p-3 mb-2 rounded border-start border-4 @GetStepBorderClass(step.Status)">
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="fw-bold">Step #@step.StepId: <code>@step.Action</code></span>
-                                    <span class="badge @(step.Status == "Completed" ? "bg-success" : "bg-warning")">@step.Status</span>
+                    <h6 class="fw-bold mb-2">Queued Agent Tasks (SQL Server `AgentTasks`):</h6>
+                    @if (eventTasks == null || eventTasks.Count == 0)
+                    {
+                        <div class="p-3 text-center text-muted bg-light rounded">
+                            <span class="spinner-border spinner-border-sm me-2" role="status"></span>
+                            Central Orchestrator worker is decomposing event into sub-agent DB tasks...
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="list-group">
+                            @foreach (var task in eventTasks)
+                            {
+                                <div class="list-group-item p-3 mb-2 rounded border-start border-4 @GetStepBorderClass(task.Status)">
+                                    <div class="d-flex justify-content-between align-items-center mb-1">
+                                        <span class="fw-bold">Step #@task.StepOrder: <code>@task.Action</code></span>
+                                        <span class="badge @GetStatusBadgeClass(task.Status)">@task.Status</span>
+                                    </div>
+                                    <small class="text-muted d-block mb-1">Assigned Agent: <strong>@task.TargetAgentId</strong> | Task Guid: <code>@task.TaskGuid[..8]</code></small>
+                                    @if (!string.IsNullOrEmpty(task.ResultJson))
+                                    {
+                                        <div class="bg-light p-2 rounded fs-7 font-monospace text-wrap mt-2">
+                                            <strong>Result:</strong> @task.ResultJson
+                                        </div>
+                                    }
                                 </div>
-                                <small class="text-muted d-block mb-1">Target Agent: <strong>@step.AgentId</strong></small>
-                                <div class="bg-light p-2 rounded fs-7 font-monospace text-wrap">
-                                    <strong>Output:</strong> @(step.ResultOutput ?? "N/A")
-                                </div>
-                            </div>
-                        }
-                    </div>
+                            }
+                        </div>
+                    }
                 }
             </div>
         </div>
@@ -93,47 +112,42 @@
 
 @code {
     private string eventSource = "BlazorDashboardUser";
-    private string promptText = "Please run sales database query for July 2026 and format tabular report";
-    private string jsonData = "{\"subject\": \"Sales Query Request\"}";
+    private string promptText = "Run sales database query for July 2026 and format report";
+    private string jsonData = "{\"subject\": \"Q3 Sales Analysis\"}";
     private bool isSubmitting = false;
-    private PlanResultResponse? executionResult;
+    private string? activeEventGuid;
+    private List<AgentTaskDto>? eventTasks;
 
     private async Task SubmitEvent()
     {
         if (string.IsNullOrWhiteSpace(promptText)) return;
 
         isSubmitting = true;
-        executionResult = null;
+        activeEventGuid = null;
+        eventTasks = null;
 
         try
         {
-            System.Text.Json.JsonElement parsedData;
-            try
-            {
-                parsedData = System.Text.Json.JsonDocument.Parse(jsonData).RootElement;
-            }
-            catch
-            {
-                parsedData = System.Text.Json.JsonDocument.Parse("{}").RootElement;
-            }
-
-            var eventMsg = new AgentEventMessage(
-                EventId: $"evt_{Guid.NewGuid():N}"[..12],
+            var req = new CreateInboundEventRequest(
                 Source: eventSource,
-                Timestamp: DateTimeOffset.UtcNow,
                 Prompt: promptText,
-                Data: parsedData
+                DataJson: jsonData
             );
 
-            var res = await Http.PostAsJsonAsync("api/events/inbound", eventMsg);
+            var res = await Http.PostAsJsonAsync("api/events/enqueue", req);
             if (res.IsSuccessStatusCode)
             {
-                executionResult = await res.Content.ReadFromJsonAsync<PlanResultResponse>();
+                var eventDto = await res.Content.ReadFromJsonAsync<InboundEventDto>();
+                if (eventDto != null)
+                {
+                    activeEventGuid = eventDto.EventGuid;
+                    await PollEventTasks();
+                }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"Error submitting event: {ex.Message}");
+            Console.WriteLine($"Error enqueuing event: {ex.Message}");
         }
         finally
         {
@@ -141,19 +155,32 @@
         }
     }
 
+    private async Task PollEventTasks()
+    {
+        if (activeEventGuid == null) return;
+        try
+        {
+            eventTasks = await Http.GetFromJsonAsync<List<AgentTaskDto>>($"api/events/queue/{activeEventGuid}/tasks");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Error polling tasks: {ex.Message}");
+        }
+    }
+
+    private static string GetStatusBadgeClass(string status) => status switch
+    {
+        "Completed" => "bg-success",
+        "InProgress" => "bg-info text-dark",
+        "Failed" => "bg-danger",
+        _ => "bg-warning text-dark"
+    };
+
     private static string GetStepBorderClass(string status) => status switch
     {
         "Completed" => "border-success",
+        "InProgress" => "border-info",
         "Failed" => "border-danger",
         _ => "border-warning"
     };
-
-    private class PlanResultResponse
-    {
-        public string Message { get; set; } = string.Empty;
-        public string EventId { get; set; } = string.Empty;
-        public string PlanId { get; set; } = string.Empty;
-        public string Status { get; set; } = string.Empty;
-        public List<TaskStep> Steps { get; set; } = new();
-    }
 }
