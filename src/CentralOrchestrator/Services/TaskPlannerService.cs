@@ -92,14 +92,15 @@ public class TaskPlannerService : ITaskPlanner
         List<AgentRegistration> activeAgents,
         CancellationToken cancellationToken)
     {
-        var systemPrompt = $@"You are a Central Orchestrator Agent. Your task is to analyze inbound user requests and dynamically match them to registered sub-agents based on their descriptions and capabilities.
+        var systemPrompt = $@"You are a Central Orchestrator Agent. Your job is to analyze unread emails and determine if they require an automated action or response from our personal multi-agent platform.
 
 Available Sub-Agents Registry:
 {agentContext}
 
 Instructions:
-1. Select which sub-agents to invoke to fulfill the request.
-2. Output ONLY a valid JSON array of step objects with format:
+1. FIRST, evaluate if the email requires an automated response or action. If the email is a promotional ad, newsletter, receipt, marketing, or no-reply notification that does NOT require an action or reply, return an EMPTY JSON array `[]`.
+2. If an automated action or response IS required, select which sub-agents to invoke to fulfill the request.
+3. Output ONLY a valid JSON array of step objects:
 [
   {{
     ""stepId"": 1,
@@ -124,7 +125,6 @@ Instructions:
         try
         {
             var jsonText = response.Choices.FirstOrDefault()?.Text ?? response.ToString();
-            // Clean markdown code fence if LLM returns ```json
             if (jsonText.Contains("```json"))
             {
                 jsonText = jsonText.Split("```json")[1].Split("```")[0].Trim();
@@ -139,7 +139,7 @@ Instructions:
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to parse LLM planner JSON response. Falling back to dynamic capability matching.");
+            _logger.LogWarning(ex, "Failed to parse LLM planner JSON response. Falling back to capability evaluation.");
             return PlanWithCapabilityMatching(eventMessage, activeAgents);
         }
     }
@@ -147,9 +147,27 @@ Instructions:
     private List<TaskStep> PlanWithCapabilityMatching(AgentEventMessage eventMessage, List<AgentRegistration> activeAgents)
     {
         var steps = new List<TaskStep>();
-        int stepIdCounter = 1;
         var promptLower = eventMessage.Prompt.ToLower();
 
+        // 1. Evaluate if this email requires an automated response or action
+        bool isAgentRequest = promptLower.Contains("report") ||
+                              promptLower.Contains("patient") ||
+                              promptLower.Contains("database") ||
+                              promptLower.Contains("mysql") ||
+                              promptLower.Contains("sql") ||
+                              promptLower.Contains("send") ||
+                              promptLower.Contains("fetch") ||
+                              promptLower.Contains("query") ||
+                              promptLower.Contains("task") ||
+                              promptLower.Contains("please");
+
+        if (!isAgentRequest)
+        {
+            _logger.LogInformation("Evaluator: Inbound email does NOT require an automated agent response. Skipping task creation.");
+            return steps; // Returns empty list (0 tasks created)
+        }
+
+        int stepIdCounter = 1;
         foreach (var agent in activeAgents)
         {
             foreach (var cap in agent.Capabilities)
@@ -157,14 +175,27 @@ Instructions:
                 var capNameLower = cap.CapabilityName.ToLower();
                 var capDescLower = cap.Description.ToLower();
 
-                // Match request intent against agent capability descriptions dynamically
-                bool matches = promptLower.Split(' ').Any(word => word.Length > 3 && (capNameLower.Contains(word) || capDescLower.Contains(word)));
+                bool matches = false;
+                if (agent.Id == "mysql-data-agent")
+                {
+                    matches = promptLower.Contains("patient") || promptLower.Contains("mysql") || promptLower.Contains("lab");
+                }
+                else if (agent.Id == "sql-data-agent")
+                {
+                    matches = (promptLower.Contains("database") || promptLower.Contains("sales") || promptLower.Contains("sql")) && !promptLower.Contains("patient");
+                }
+                else if (agent.Id == "outlook-email-agent")
+                {
+                    matches = promptLower.Contains("send") || promptLower.Contains("email") || promptLower.Contains("reply") || promptLower.Contains("mail");
+                }
+                else
+                {
+                    matches = promptLower.Split(' ').Any(word => word.Length > 4 && (capNameLower.Contains(word) || capDescLower.Contains(word)));
+                }
 
                 if (matches)
                 {
                     var parameters = new Dictionary<string, object>();
-                    
-                    // Extract payload parameters generically
                     if (eventMessage.Data.ValueKind == JsonValueKind.Object)
                     {
                         foreach (var prop in eventMessage.Data.EnumerateObject())

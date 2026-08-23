@@ -42,21 +42,6 @@ def run_inbox_watcher(client: OutlookClient):
             if is_processed(entry_id):
                 continue
 
-            subject_lower = email["subject"].lower()
-            body_lower = email["bodyText"].lower()
-            sender_lower = email.get("sender", "").lower()
-
-            # Ignore no-reply automated marketing emails
-            if "no-reply" in sender_lower or "noreply" in sender_lower or "donotreply" in sender_lower:
-                mark_processed(entry_id)
-                continue
-
-            # Only process relevant agent request emails
-            keywords = ["request", "agent", "lab report", "patient", "task", "report", "query"]
-            if not any(k in subject_lower or k in body_lower for k in keywords):
-                mark_processed(entry_id)
-                continue
-
             prompt = f"Process incoming email: {email['subject']}\nBody: {email['bodyText']}"
             event_guid = enqueue_inbound_event(
                 source="OutlookEmailAgent",
@@ -64,7 +49,7 @@ def run_inbox_watcher(client: OutlookClient):
                 data_json=email
             )
             safe_subject = email['subject'].encode('ascii', 'replace').decode('ascii')
-            print(f"[OutlookWatcher] Enqueued email '{safe_subject}' to SQL Server InboundEvents (Guid: {event_guid})")
+            print(f"[OutlookWatcher] Enqueued unread email '{safe_subject}' to SQL Server InboundEvents (Guid: {event_guid})")
             mark_processed(entry_id)
     except Exception as e:
         print(f"[OutlookWatcher Error] {e}")
