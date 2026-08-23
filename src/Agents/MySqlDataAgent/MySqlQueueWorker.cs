@@ -82,22 +82,53 @@ public class MySqlQueueWorker : BackgroundService
     private async Task<string> ExecuteRealMySqlPatientQueryAsync(string payloadJson, CancellationToken cancellationToken)
     {
         int limit = 5;
+        string? genderFilter = null;
         try
         {
             using var doc = JsonDocument.Parse(payloadJson);
-            if (doc.RootElement.TryGetProperty("patientCount", out var countProp) && countProp.TryGetInt32(out int c))
+            var root = doc.RootElement;
+            if (root.TryGetProperty("patientCount", out var countProp) && countProp.TryGetInt32(out int c))
             {
                 limit = c;
+            }
+            if (root.TryGetProperty("genderFilter", out var gProp) && gProp.ValueKind == JsonValueKind.String)
+            {
+                genderFilter = gProp.GetString();
+            }
+            else if (root.TryGetProperty("prompt", out var pProp) && pProp.ValueKind == JsonValueKind.String)
+            {
+                var promptStr = pProp.GetString()?.ToLower() ?? "";
+                if (promptStr.Contains("female") || promptStr.Contains("woman") || promptStr.Contains("women"))
+                {
+                    genderFilter = "Female";
+                }
+                else if (promptStr.Contains("male") || promptStr.Contains("man") || promptStr.Contains("men"))
+                {
+                    genderFilter = "Male";
+                }
             }
         }
         catch { }
 
-        _logger.LogInformation("Executing JOIN query across labreports.lab_report and patients_info.vw_hospitalpatientcurrent for last {Count} patients...", limit);
+        string whereClause = "";
+        if (!string.IsNullOrWhiteSpace(genderFilter))
+        {
+            if (genderFilter.Equals("Female", StringComparison.OrdinalIgnoreCase))
+            {
+                whereClause = "WHERE SexAtBirth = 1 OR SexAtBirth = '1' OR SexAtBirth = 'Female' OR SexAtBirth = 'F'";
+            }
+            else if (genderFilter.Equals("Male", StringComparison.OrdinalIgnoreCase))
+            {
+                whereClause = "WHERE SexAtBirth = 2 OR SexAtBirth = '2' OR SexAtBirth = 'Male' OR SexAtBirth = 'M'";
+            }
+        }
+
+        _logger.LogInformation("Executing JOIN query across labreports.lab_report and patients_info.vw_hospitalpatientcurrent (GenderFilter: '{Gender}') for last {Count} patients...", genderFilter ?? "All", limit);
 
         await using var conn = new MySqlConnection(MySqlConnectionString);
         await conn.OpenAsync(cancellationToken);
 
-        string sql = @"
+        string sql = $@"
             SELECT 
                 lr.PatientPID,
                 p.FirstName,
@@ -109,13 +140,14 @@ public class MySqlQueueWorker : BackgroundService
                 ai.Diagnostic,
                 ai.PatientAdvice
             FROM labreports.lab_report lr
-            LEFT JOIN (
+            {(string.IsNullOrEmpty(whereClause) ? "LEFT JOIN" : "INNER JOIN")} (
                 SELECT DISTINCT PatientId, FirstName, LastName, AgeYears, HospitalName 
                 FROM patients_info.vw_hospitalpatientcurrent
+                {whereClause}
             ) p ON lr.PatientPID = p.PatientId
             LEFT JOIN labreports.lab_report_ai ai ON lr.ReportId = ai.ReportId
             ORDER BY lr.CreatedAt DESC
-            LIMIT " + limit + ";";
+            LIMIT {limit};";
 
         await using var cmd = new MySqlCommand(sql, conn);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
