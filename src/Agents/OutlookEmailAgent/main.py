@@ -48,7 +48,8 @@ def run_inbox_watcher(client: OutlookClient):
                 prompt=prompt,
                 data_json=email
             )
-            print(f"[OutlookWatcher] Enqueued email '{email['subject']}' to SQL Server InboundEvents (Guid: {event_guid})")
+            safe_subject = email['subject'].encode('ascii', 'replace').decode('ascii')
+            print(f"[OutlookWatcher] Enqueued email '{safe_subject}' to SQL Server InboundEvents (Guid: {event_guid})")
             mark_processed(entry_id)
     except Exception as e:
         print(f"[OutlookWatcher Error] {e}")
@@ -65,12 +66,14 @@ def run_outbound_queue_worker(client: OutlookClient):
                 print(f"[OutlookWorker] Claimed outbound email task {task_guid}")
                 try:
                     target_entry_id = payload.get("targetEntryId")
+                    to_recipient = payload.get("to") or payload.get("sender") or "keerukee@outlook.com"
                     subject = payload.get("subject", "Automated Response")
-                    html_body = payload.get("htmlBody", "<p>Task executed successfully.</p>")
+                    html_body = payload.get("htmlBody", payload.get("prompt", "<p>Task executed successfully.</p>"))
                     attachments = payload.get("attachments")
 
                     client.send_or_reply_email(
                         target_entry_id=target_entry_id,
+                        to=to_recipient,
                         subject=subject,
                         html_body=html_body,
                         attachments=attachments

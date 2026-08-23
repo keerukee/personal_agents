@@ -86,7 +86,7 @@ using (var scope = host.Services.CreateScope())
                     [EventGuid] NVARCHAR(450) NOT NULL UNIQUE,
                     [Source] NVARCHAR(100) NOT NULL,
                     [Prompt] NVARCHAR(MAX) NOT NULL,
-                    [DataJson] NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+                    [DataJson] NVARCHAR(MAX) NOT NULL DEFAULT '{{}}',
                     [Status] NVARCHAR(50) NOT NULL DEFAULT 'Pending',
                     [CreatedAt] DATETIMEOFFSET NOT NULL,
                     [ProcessedAt] DATETIMEOFFSET NULL
@@ -102,7 +102,7 @@ using (var scope = host.Services.CreateScope())
                     [StepOrder] INT NOT NULL DEFAULT 1,
                     [TargetAgentId] NVARCHAR(450) NOT NULL,
                     [Action] NVARCHAR(100) NOT NULL,
-                    [PayloadJson] NVARCHAR(MAX) NOT NULL DEFAULT '{}',
+                    [PayloadJson] NVARCHAR(MAX) NOT NULL DEFAULT '{{}}',
                     [Status] NVARCHAR(50) NOT NULL DEFAULT 'Pending',
                     [ResultJson] NVARCHAR(MAX) NULL,
                     [ErrorMessage] NVARCHAR(MAX) NULL,

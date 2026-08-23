@@ -49,32 +49,39 @@ class OutlookClient:
 
         return emails
 
-    def send_or_reply_email(self, target_entry_id: str, subject: str, html_body: str, attachments: list = None):
+    def send_or_reply_email(self, target_entry_id: str = None, to: str = None, subject: str = "Automated Response", html_body: str = "", attachments: list = None):
         """Replies to existing email thread or sends new email via desktop Outlook MAPI."""
         pythoncom.CoInitialize()
         try:
             outlook = win32com.client.Dispatch("Outlook.Application")
             namespace = outlook.GetNamespace("MAPI")
 
+            mail = None
             if target_entry_id:
                 try:
                     orig_item = namespace.GetItemFromID(target_entry_id)
-                    mail = orig_item.Reply()
-                except Exception:
-                    mail = outlook.CreateItem(0) # 0 = olMailItem
-            else:
+                    if orig_item:
+                        mail = orig_item.Reply()
+                except Exception as ex:
+                    print(f"[OutlookClient Info] Could not reply to EntryID, creating new mail: {ex}")
+                    mail = None
+
+            if mail is None:
                 mail = outlook.CreateItem(0)
 
+            recipient = to or "keerukee@outlook.com"
+            mail.To = recipient
             mail.Subject = subject
-            mail.HTMLBody = html_body + "<br/><br/>" + getattr(mail, "HTMLBody", "")
+            mail.HTMLBody = html_body
 
             if attachments:
                 for att in attachments:
-                    if os.path.exists(att):
+                    if att and os.path.isfile(att):
                         mail.Attachments.Add(att)
 
             mail.Send()
-            print(f"[OutlookClient Success] Sent email: '{subject}'")
+            safe_subj = subject.encode('ascii', 'replace').decode('ascii')
+            print(f"[OutlookClient Success] Sent email to '{recipient}' with subject: '{safe_subj}'")
             return True
         except Exception as e:
             print(f"[OutlookClient Error] Failed to send email: {e}")
