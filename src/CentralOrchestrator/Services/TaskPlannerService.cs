@@ -145,37 +145,45 @@ Instructions:
             MaxTokens: 1000
         ), cancellationToken);
 
-        var jsonText = response.ResponseText ?? string.Empty;
-        _logger.LogInformation("LLM Raw Response: {ResponseText}", jsonText);
-
-        if (jsonText.Contains("```json"))
+        try
         {
-            jsonText = jsonText.Split("```json")[1].Split("```")[0].Trim();
-        }
-        else if (jsonText.Contains("```"))
-        {
-            jsonText = jsonText.Split("```")[1].Split("```")[0].Trim();
-        }
+            var jsonText = response.ResponseText ?? string.Empty;
+            _logger.LogInformation("LLM Raw Response: {ResponseText}", jsonText);
 
-        var steps = JsonSerializer.Deserialize<List<TaskStep>>(jsonText, JsonOptions);
-
-        if (steps != null && steps.Count > 0)
-        {
-            var orderedSteps = steps
-                .OrderByDescending(s => s.Action.Contains("query") || s.Action.Contains("analyze") || s.AgentId.Contains("data"))
-                .ToList();
-
-            var finalSteps = new List<TaskStep>();
-            for (int i = 0; i < orderedSteps.Count; i++)
+            if (jsonText.Contains("```json"))
             {
-                int currentStepId = i + 1;
-                var dependsOnList = i > 0 ? new List<int> { i } : new List<int>();
-                finalSteps.Add(orderedSteps[i] with { StepId = currentStepId, DependsOn = dependsOnList });
+                jsonText = jsonText.Split("```json")[1].Split("```")[0].Trim();
             }
-            return finalSteps;
-        }
+            else if (jsonText.Contains("```"))
+            {
+                jsonText = jsonText.Split("```")[1].Split("```")[0].Trim();
+            }
 
-        return steps ?? new List<TaskStep>();
+            var steps = JsonSerializer.Deserialize<List<TaskStep>>(jsonText, JsonOptions);
+
+            if (steps != null && steps.Count > 0)
+            {
+                var orderedSteps = steps
+                    .OrderByDescending(s => s.Action.Contains("query") || s.Action.Contains("analyze") || s.AgentId.Contains("data"))
+                    .ToList();
+
+                var finalSteps = new List<TaskStep>();
+                for (int i = 0; i < orderedSteps.Count; i++)
+                {
+                    int currentStepId = i + 1;
+                    var dependsOnList = i > 0 ? new List<int> { i } : new List<int>();
+                    finalSteps.Add(orderedSteps[i] with { StepId = currentStepId, DependsOn = dependsOnList });
+                }
+                return finalSteps;
+            }
+
+            return steps ?? new List<TaskStep>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to parse LLM JSON response into TaskStep list. Falling back to capability evaluation.");
+            return PlanWithCapabilityMatching(eventMessage, activeAgents);
+        }
     }
 
     private async Task<List<TaskStep>> PlanWithLlmAsync(
