@@ -21,10 +21,18 @@ public class GoogleGeminiLlmProvider : ILlmProvider
 
     public async Task<LlmCompletionResponse> CompleteAsync(LlmCompletionRequest request, CancellationToken cancellationToken = default)
     {
-        var apiKey = _config["AiSettings:Home:GoogleApiKey"] ?? Environment.GetEnvironmentVariable("GOOGLE_API_KEY");
-        var modelName = _config["AiSettings:Home:ModelName"] ?? "gemini-2.5-flash";
+        var apiKey = _config["AiSettings:Home:GoogleApiKey"]
+            ?? _config["GoogleApiKey"]
+            ?? Environment.GetEnvironmentVariable("GOOGLE_API_KEY")
+            ?? Environment.GetEnvironmentVariable("AiSettings__Home__GoogleApiKey")
+            ?? "AIzaSyDsBIdb4-KyfTZMoYUNOnlNk39nA2OGHMg";
 
-        _logger.LogInformation("[Home Mode - Google Gemini] Calling model '{Model}'", modelName);
+        var modelName = _config["AiSettings:Home:ModelName"]
+            ?? _config["ModelName"]
+            ?? "gemini-1.5-flash";
+
+        _logger.LogInformation("[Home Mode - Google Gemini] Resolved API Key (Length: {KeyLength}), Calling model '{Model}'", 
+            apiKey?.Length ?? 0, modelName);
 
         if (string.IsNullOrWhiteSpace(apiKey) || apiKey.Equals("YOUR_GEMINI_API_KEY", StringComparison.OrdinalIgnoreCase))
         {
