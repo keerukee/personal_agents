@@ -44,13 +44,13 @@ public class MySqlQueueWorker : BackgroundService
 
                     try
                     {
-                        var resultMarkdown = await ExecuteRealMySqlPatientQueryAsync(task.PayloadJson, stoppingToken);
+                        var resultHtml = await ExecuteRealMySqlPatientQueryAsync(task.PayloadJson, scope.ServiceProvider, stoppingToken);
 
                         var resultObj = new
                         {
                             agentId = AgentId,
                             action = task.Action,
-                            output = resultMarkdown
+                            output = resultHtml
                         };
 
                         await queueService.UpdateTaskResultAsync(task.TaskGuid, new UpdateTaskResultRequest(
@@ -79,145 +79,163 @@ public class MySqlQueueWorker : BackgroundService
         }
     }
 
-    private async Task<string> ExecuteRealMySqlPatientQueryAsync(string payloadJson, CancellationToken cancellationToken)
+    private async Task<string> ExecuteRealMySqlPatientQueryAsync(string payloadJson, IServiceProvider serviceProvider, CancellationToken cancellationToken)
     {
-        int limit = 5;
-        string? genderFilter = null;
+        // 1. Get LLM provider
+        var aiFactory = serviceProvider.GetRequiredService<CentralOrchestrator.Services.AI.IAiProviderFactory>();
+        var llm = aiFactory.GetLlmProvider();
+
+        string taskDesc = "Query patient lab reports.";
         try
         {
             using var doc = JsonDocument.Parse(payloadJson);
-            var root = doc.RootElement;
-            if (root.TryGetProperty("patientCount", out var countProp) && countProp.TryGetInt32(out int c))
+            if (doc.RootElement.TryGetProperty("task", out var taskProp))
             {
-                limit = c;
-            }
-            if (root.TryGetProperty("genderFilter", out var gProp) && gProp.ValueKind == JsonValueKind.String)
-            {
-                genderFilter = gProp.GetString();
-            }
-            else if (root.TryGetProperty("prompt", out var pProp) && pProp.ValueKind == JsonValueKind.String)
-            {
-                var promptStr = pProp.GetString()?.ToLower() ?? "";
-                if (promptStr.Contains("female") || promptStr.Contains("woman") || promptStr.Contains("women"))
-                {
-                    genderFilter = "Female";
-                }
-                else if (promptStr.Contains("male") || promptStr.Contains("man") || promptStr.Contains("men"))
-                {
-                    genderFilter = "Male";
-                }
+                taskDesc = taskProp.GetString() ?? taskDesc;
             }
         }
         catch { }
 
-        string whereClause = "";
-        if (!string.IsNullOrWhiteSpace(genderFilter))
+        _logger.LogInformation("Agent-Local LLM processing task: {TaskDesc}", taskDesc);
+
+        // 2. Generate SQL via LLM
+        var sqlSchemaPrompt = @"You are an expert MySQL database agent. Your job is to generate a SQL query based on a natural language request.
+You have access to the following databases and tables on localhost:3306.
+
+Database: labreports
+Table: lab_report (ReportId VARCHAR, PatientPID VARCHAR, ReportedAt DATETIME, Content JSON, CreatedAt DATETIME)
+Table: lab_report_ai (ReportId VARCHAR, Diagnostic TEXT, PatientAdvice TEXT)
+
+Database: patients_info
+Table: vw_hospitalpatientcurrent (PatientId VARCHAR, FirstName VARCHAR, LastName VARCHAR, AgeYears INT, HospitalName VARCHAR, SexAtBirth VARCHAR)
+
+Relationships: 
+- labreports.lab_report.PatientPID = patients_info.vw_hospitalpatientcurrent.PatientId
+- labreports.lab_report.ReportId = labreports.lab_report_ai.ReportId
+
+Notes on Data:
+- SexAtBirth values: '1' or 'Female' or 'F' means Female. '2' or 'Male' or 'M' means Male.
+- The 'Content' field in lab_report contains JSON with laboratory test results.
+
+Instructions:
+Generate ONLY the raw MySQL query to fulfill the user's task. 
+Do NOT wrap the output in markdown code blocks like ```sql ... ```. Output ONLY the raw SQL string.
+LIMIT results to a reasonable amount (e.g. 5) if not specified.";
+
+        var sqlResponse = await llm.CompleteAsync(new Common.Contracts.LlmCompletionRequest(
+            Prompt: taskDesc,
+            SystemInstruction: sqlSchemaPrompt,
+            Temperature: 0.1f,
+            MaxTokens: 2000
+        ), cancellationToken);
+
+        string sql = sqlResponse.ResponseText?.Trim() ?? "";
+        if (sql.StartsWith("```sql"))
         {
-            if (genderFilter.Equals("Female", StringComparison.OrdinalIgnoreCase))
-            {
-                whereClause = "WHERE SexAtBirth = 1 OR SexAtBirth = '1' OR SexAtBirth = 'Female' OR SexAtBirth = 'F'";
-            }
-            else if (genderFilter.Equals("Male", StringComparison.OrdinalIgnoreCase))
-            {
-                whereClause = "WHERE SexAtBirth = 2 OR SexAtBirth = '2' OR SexAtBirth = 'Male' OR SexAtBirth = 'M'";
-            }
+            sql = sql.Split("```sql")[1].Split("```")[0].Trim();
+        }
+        else if (sql.StartsWith("```"))
+        {
+            sql = sql.Split("```")[1].Split("```")[0].Trim();
         }
 
-        _logger.LogInformation("Executing JOIN query across labreports.lab_report and patients_info.vw_hospitalpatientcurrent (GenderFilter: '{Gender}') for last {Count} patients...", genderFilter ?? "All", limit);
+        _logger.LogInformation("Agent-Local LLM generated SQL: {Sql}", sql);
 
+        // 3. Execute SQL
+        var results = new List<Dictionary<string, object>>();
         await using var conn = new MySqlConnection(MySqlConnectionString);
         await conn.OpenAsync(cancellationToken);
-
-        string sql = $@"
-            SELECT 
-                lr.PatientPID,
-                p.FirstName,
-                p.LastName,
-                p.AgeYears,
-                p.HospitalName,
-                lr.ReportedAt,
-                lr.Content,
-                ai.Diagnostic,
-                ai.PatientAdvice
-            FROM labreports.lab_report lr
-            {(string.IsNullOrEmpty(whereClause) ? "LEFT JOIN" : "INNER JOIN")} (
-                SELECT DISTINCT PatientId, FirstName, LastName, AgeYears, HospitalName 
-                FROM patients_info.vw_hospitalpatientcurrent
-                {whereClause}
-            ) p ON lr.PatientPID = p.PatientId
-            LEFT JOIN labreports.lab_report_ai ai ON lr.ReportId = ai.ReportId
-            ORDER BY lr.CreatedAt DESC
-            LIMIT {limit};";
-
         await using var cmd = new MySqlCommand(sql, conn);
         await using var reader = await cmd.ExecuteReaderAsync(cancellationToken);
 
-        var sb = new StringBuilder();
-        sb.AppendLine("### 🏥 MySQL Lab Reports & Patients Information Report");
-        sb.AppendLine("**Databases Joined:** `labreports.lab_report` ⟗ `patients_info.vw_hospitalpatientcurrent`");
-        sb.AppendLine($"**Query Time:** {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss} UTC");
-        sb.AppendLine();
-        sb.AppendLine("| # | Patient Name | Age | Hospital | Reported Date | Key Lab Tests & Abnormal Values | AI Diagnostic Summary |");
-        sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
-
-        int rowIdx = 1;
         while (await reader.ReadAsync(cancellationToken))
         {
-            string patientPid = reader.IsDBNull(0) ? "N/A" : reader.GetString(0);
-            string firstName = reader.IsDBNull(1) ? "" : reader.GetString(1);
-            string lastName = reader.IsDBNull(2) ? "" : reader.GetString(2);
-            string ageStr = reader.IsDBNull(3) ? "N/A" : reader.GetValue(3).ToString()!;
-            string hospitalStr = reader.IsDBNull(4) ? "Hospital" : reader.GetString(4);
-            string reportedAt = reader.IsDBNull(5) ? "N/A" : reader.GetDateTime(5).ToString("yyyy-MM-dd");
-            string contentJson = reader.IsDBNull(6) ? "{}" : reader.GetString(6);
-            string aiDiagnostic = reader.IsDBNull(7) ? "Pending AI analysis" : reader.GetString(7);
-
-            string fullName = $"{firstName} {lastName}".Trim();
-            if (string.IsNullOrWhiteSpace(fullName))
+            var row = new Dictionary<string, object?>();
+            for (int i = 0; i < reader.FieldCount; i++)
             {
-                fullName = $"Patient GUID: {patientPid[..8]}...";
-            }
-
-            var testList = new List<string>();
-            try
-            {
-                using var jsonDoc = JsonDocument.Parse(contentJson);
-                if (jsonDoc.RootElement.TryGetProperty("Reports", out var reportsProp) && reportsProp.ValueKind == JsonValueKind.Object)
+                var colName = reader.GetName(i);
+                var val = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                
+                if (val is DateTime dt)
                 {
-                    foreach (var category in reportsProp.EnumerateObject())
+                    row[colName] = dt.ToString("o");
+                }
+                else if (val is string strVal && (strVal.TrimStart().StartsWith("{") || strVal.TrimStart().StartsWith("[")))
+                {
+                    try
                     {
-                        if (category.Value.ValueKind == JsonValueKind.Object)
-                        {
-                            foreach (var test in category.Value.EnumerateObject())
-                            {
-                                if (test.Value.ValueKind == JsonValueKind.Object)
-                                {
-                                    string reportVal = test.Value.TryGetProperty("Report", out var rVal) ? rVal.GetString() ?? "" : "";
-                                    string stdVal = test.Value.TryGetProperty("StandardValue", out var sVal) && sVal.ValueKind == JsonValueKind.String ? sVal.GetString() ?? "" : "";
-                                    bool isAbnormal = test.Value.TryGetProperty("IsAbnormal", out var abVal) && abVal.GetBoolean();
-
-                                    if (!string.IsNullOrWhiteSpace(reportVal))
-                                    {
-                                        string refStr = !string.IsNullOrWhiteSpace(stdVal) ? $" *(Ref: {stdVal.Trim()})*" : "";
-                                        string mark = isAbnormal ? " ⚠️ (ABNORMAL)" : "";
-                                        testList.Add($"**{test.Name}:** {reportVal.Trim()}{refStr}{mark}");
-                                    }
-                                }
-                            }
-                        }
+                        var node = System.Text.Json.Nodes.JsonNode.Parse(strVal);
+                        CleanRtfNodes(node);
+                        row[colName] = node;
+                    }
+                    catch
+                    {
+                        row[colName] = strVal;
                     }
                 }
+                else
+                {
+                    row[colName] = val;
+                }
             }
-            catch { }
-
-            string testSummary = testList.Count > 0 ? string.Join("<br/>", testList.Take(4)) : "Laboratory findings recorded";
-            string truncatedDiag = aiDiagnostic.Length > 120 ? aiDiagnostic[..120] + "..." : aiDiagnostic;
-
-            sb.AppendLine($"| {rowIdx++} | **{fullName}** | {ageStr} | {hospitalStr} | {reportedAt} | {testSummary} | {truncatedDiag} |");
+            results.Add(row!);
         }
 
-        sb.AppendLine();
-        sb.AppendLine($"*Extracted live from MySQL `labreports` and `patients_info` databases at {DateTimeOffset.UtcNow:u}*");
-        return sb.ToString();
+        string rawResultsJson = JsonSerializer.Serialize(results);
+        _logger.LogInformation("SQL execution returned {Count} rows.", results.Count);
+
+        // 4. Format Results via LLM
+        var formatPrompt = @"You are a report formatting agent. Your job is to format raw JSON database query results into a clean, professional HTML report.
+The report will be sent via email. 
+
+Instructions:
+1. Analyze the JSON results and create a summary of the findings.
+2. Format the data into an HTML table with clear headers. Use styling for the table borders and headers.
+3. If the data contains JSON content (like the `Content` field with lab report test values), parse them and display the key abnormal tests clearly in the table instead of dumping raw JSON.
+4. Output ONLY the raw HTML string. Do NOT wrap in markdown blocks like ```html ... ```.";
+
+        var formatResponse = await llm.CompleteAsync(new Common.Contracts.LlmCompletionRequest(
+            Prompt: $"Task: {taskDesc}\n\nRaw JSON Results from DB:\n{rawResultsJson}",
+            SystemInstruction: formatPrompt,
+            Temperature: 0.2f,
+            MaxTokens: 8192
+        ), cancellationToken);
+
+        string finalHtml = formatResponse.ResponseText?.Trim() ?? "";
+        if (finalHtml.StartsWith("```html"))
+        {
+            finalHtml = finalHtml.Split("```html")[1].Split("```")[0].Trim();
+        }
+        else if (finalHtml.StartsWith("```"))
+        {
+            finalHtml = finalHtml.Split("```")[1].Split("```")[0].Trim();
+        }
+
+        _logger.LogInformation("Agent-Local LLM generated HTML report length: {Length}", finalHtml.Length);
+        
+        return finalHtml;
+    }
+
+    private void CleanRtfNodes(System.Text.Json.Nodes.JsonNode? node)
+    {
+        if (node is System.Text.Json.Nodes.JsonObject obj)
+        {
+            if (obj.ContainsKey("AbnormalDesc"))
+            {
+                obj.Remove("AbnormalDesc");
+            }
+            
+            foreach (var kvp in obj.ToArray())
+            {
+                CleanRtfNodes(kvp.Value);
+            }
+        }
+        else if (node is System.Text.Json.Nodes.JsonArray arr)
+        {
+            foreach (var item in arr)
+            {
+                CleanRtfNodes(item);
+            }
+        }
     }
 }

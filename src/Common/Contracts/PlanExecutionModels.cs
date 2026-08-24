@@ -13,9 +13,10 @@ public record TaskPlan(
 public record TaskStep(
     [property: JsonPropertyName("stepId")] int StepId,
     [property: JsonPropertyName("agentId")] string AgentId,
-    [property: JsonPropertyName("action")] string Action,
-    [property: JsonPropertyName("parameters")] Dictionary<string, object> Parameters,
+    [property: JsonPropertyName("task")] string? TaskDescription,
+    [property: JsonPropertyName("action")] string? Action,
+    [property: JsonPropertyName("parameters")] Dictionary<string, object>? Parameters,
     [property: JsonPropertyName("dependsOn")] List<int> DependsOn,
-    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("status")] string? Status,
     [property: JsonPropertyName("resultOutput")] string? ResultOutput
 );

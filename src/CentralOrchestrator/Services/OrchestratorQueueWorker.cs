@@ -57,13 +57,35 @@ public class OrchestratorQueueWorker : BackgroundService
                     var plan = await taskPlanner.CreatePlanAsync(eventMsg, stoppingToken);
 
                     // 4. Enqueue planned steps into AgentTasks table in SQL Server
-                    var taskRequests = plan.Steps.Select(step => new CreateAgentTaskRequest(
-                        ParentEventGuid: evt.EventGuid,
-                        StepOrder: step.StepId,
-                        TargetAgentId: step.AgentId,
-                        Action: step.Action,
-                        PayloadJson: JsonSerializer.Serialize(step.Parameters)
-                    )).ToList();
+                    var taskRequests = plan.Steps.Select(step => {
+                        var payloadDict = step.Parameters != null ? new Dictionary<string, object>(step.Parameters) : new Dictionary<string, object>();
+                        
+                        if (!string.IsNullOrWhiteSpace(step.TaskDescription))
+                        {
+                            payloadDict["task"] = step.TaskDescription;
+                        }
+
+                        // Inject email context so agents know what they are dealing with
+                        if (eventMsg.Data.TryGetProperty("subject", out var subjProp))
+                            payloadDict["emailSubject"] = subjProp.GetString() ?? "";
+                            
+                        if (eventMsg.Data.TryGetProperty("bodyText", out var bodyProp))
+                            payloadDict["emailBody"] = bodyProp.GetString() ?? "";
+                            
+                        if (eventMsg.Data.TryGetProperty("sender", out var senderProp))
+                            payloadDict["sender"] = senderProp.GetString() ?? "";
+                            
+                        if (eventMsg.Data.TryGetProperty("entryId", out var entryIdProp))
+                            payloadDict["targetEntryId"] = entryIdProp.GetString() ?? "";
+
+                        return new CreateAgentTaskRequest(
+                            ParentEventGuid: evt.EventGuid,
+                            StepOrder: step.StepId,
+                            TargetAgentId: step.AgentId,
+                            Action: string.IsNullOrWhiteSpace(step.Action) ? "execute_task" : step.Action,
+                            PayloadJson: JsonSerializer.Serialize(payloadDict)
+                        );
+                    }).ToList();
 
                     if (taskRequests.Count > 0)
                     {

@@ -29,7 +29,7 @@ public class GoogleGeminiLlmProvider : ILlmProvider
 
         var modelName = _config["AiSettings:Home:ModelName"]
             ?? _config["ModelName"]
-            ?? "gemini-1.5-flash";
+            ?? "gemini-3.5-flash";
 
         _logger.LogInformation("[Home Mode - Google Gemini] Resolved API Key (Length: {KeyLength}), Calling model '{Model}'", 
             apiKey?.Length ?? 0, modelName);
@@ -76,8 +76,8 @@ public class GoogleGeminiLlmProvider : ILlmProvider
                 _logger.LogWarning("[Google Gemini Warning] API call returned HTTP {StatusCode}: {Error}. Falling back to dynamic DAG plan.", response.StatusCode, errorContent);
 
                 var fallbackJson = @"[
-  { ""stepId"": 1, ""agentId"": ""mysql-data-agent"", ""action"": ""query_labreports_db"", ""parameters"": { ""patientCount"": 5, ""gender"": ""Female"" }, ""dependsOn"": [] },
-  { ""stepId"": 2, ""agentId"": ""outlook-email-agent"", ""action"": ""send_reply"", ""parameters"": {}, ""dependsOn"": [1] }
+  { ""stepId"": 1, ""agentId"": ""mysql-data-agent"", ""task"": ""Fetch the last 5 female patient lab reports."", ""dependsOn"": [] },
+  { ""stepId"": 2, ""agentId"": ""outlook-email-agent"", ""task"": ""Reply to the email with the patient report."", ""dependsOn"": [1] }
 ]";
 
                 return new LlmCompletionResponse(
@@ -88,13 +88,25 @@ public class GoogleGeminiLlmProvider : ILlmProvider
                 );
             }
 
-            using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
-            var text = doc.RootElement
+            var rawBody = await response.Content.ReadAsStringAsync(cancellationToken);
+            _logger.LogDebug("[Google Gemini] Raw API response: {RawBody}", rawBody);
+
+            using var doc = JsonDocument.Parse(rawBody);
+            var parts = doc.RootElement
                 .GetProperty("candidates")[0]
                 .GetProperty("content")
-                .GetProperty("parts")[0]
-                .GetProperty("text")
-                .GetString() ?? string.Empty;
+                .GetProperty("parts");
+
+            // Concatenate text from ALL parts (Gemini may split across multiple parts)
+            var textBuilder = new System.Text.StringBuilder();
+            foreach (var part in parts.EnumerateArray())
+            {
+                if (part.TryGetProperty("text", out var textProp))
+                {
+                    textBuilder.Append(textProp.GetString());
+                }
+            }
+            var text = textBuilder.ToString();
 
             return new LlmCompletionResponse(
                 ResponseText: text,
@@ -107,8 +119,8 @@ public class GoogleGeminiLlmProvider : ILlmProvider
         {
             _logger.LogWarning(ex, "[Google Gemini Warning] API call failed. Returning dynamic DAG plan fallback.");
             var fallbackJson = @"[
-  { ""stepId"": 1, ""agentId"": ""mysql-data-agent"", ""action"": ""query_labreports_db"", ""parameters"": { ""patientCount"": 5, ""gender"": ""Female"" }, ""dependsOn"": [] },
-  { ""stepId"": 2, ""agentId"": ""outlook-email-agent"", ""action"": ""send_reply"", ""parameters"": {}, ""dependsOn"": [1] }
+  { ""stepId"": 1, ""agentId"": ""mysql-data-agent"", ""task"": ""Fetch the last 5 female patient lab reports."", ""dependsOn"": [] },
+  { ""stepId"": 2, ""agentId"": ""outlook-email-agent"", ""task"": ""Reply to the email with the patient report."", ""dependsOn"": [1] }
 ]";
 
             return new LlmCompletionResponse(

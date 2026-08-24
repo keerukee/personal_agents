@@ -114,25 +114,31 @@ public class TaskPlannerService : ITaskPlanner
         ILlmProvider llmProvider,
         CancellationToken cancellationToken)
     {
-        var systemPrompt = $@"You are a Central Orchestrator Agent. Your job is to analyze unread emails and create an execution plan using our available sub-agents.
+        var systemPrompt = $@"You are the Central Orchestrator Router. Your job is to analyze unread emails and route them to the appropriate autonomous sub-agents.
+You decide WHICH agents to use and WHAT they should do, but you do NOT dictate HOW they do it. The agents will figure out the implementation details themselves.
 
-Available Sub-Agents Registry:
+Available Sub-Agents:
 {agentContext}
 
-Instructions:
-1. FIRST, evaluate if the email requires an automated response or action. If the email is a promotional ad, newsletter, receipt, marketing, or no-reply notification that does NOT require an action or reply, return an EMPTY JSON array `[]`.
-2. If the email requests data, reports, or database information (e.g., patient lab reports, medical records, sales queries):
-   - You MUST generate a 2-step DAG execution plan:
-     * STEP 1: Call the database agent (e.g. 'mysql-data-agent' with action 'query_labreports_db' or 'sql-data-agent' with action 'query_database') to fetch the data.
-     * STEP 2: Call the email agent (e.g. 'outlook-email-agent' with action 'send_reply' or 'send_email') with `dependsOn: [1]` to email the extracted report back to the user!
-3. Output ONLY a valid JSON array of step objects:
+CRITICAL ROUTING RULES:
+- If the email requests lab reports, patient data, or medical records, route it to 'mysql-data-agent'. Give it a clear natural language 'task' describing exactly what information to fetch.
+- If the email is asking a question or requesting a report back, you MUST add a second step for 'outlook-email-agent' to reply with the results.
+- Do NOT use 'sql-data-agent' (it is deprecated for lab reports).
+- If the email is a promotional ad, newsletter, receipt, or do-not-reply notification, return an EMPTY array `[]`.
+
+Output ONLY a valid JSON array of step objects. No markdown, no explanation, just JSON:
 [
   {{
     ""stepId"": 1,
-    ""agentId"": ""target-agent-id"",
-    ""action"": ""capability_action_name"",
-    ""parameters"": {{ ""key"": ""value"" }},
+    ""agentId"": ""mysql-data-agent"",
+    ""task"": ""Get the last 5 female patient lab reports including test results and AI diagnostics."",
     ""dependsOn"": []
+  }},
+  {{
+    ""stepId"": 2,
+    ""agentId"": ""outlook-email-agent"",
+    ""task"": ""Reply to the sender with the HTML report generated in the previous step."",
+    ""dependsOn"": [1]
   }}
 ]";
 
@@ -142,7 +148,7 @@ Instructions:
             Prompt: userPrompt,
             SystemInstruction: systemPrompt,
             Temperature: 0.1f,
-            MaxTokens: 1000
+            MaxTokens: 8192
         ), cancellationToken);
 
         try
@@ -297,6 +303,7 @@ Instructions:
                     steps.Add(new TaskStep(
                         StepId: currentStepId,
                         AgentId: agent.Id,
+                        TaskDescription: eventMessage.Prompt,
                         Action: cap.CapabilityName,
                         Parameters: parameters,
                         DependsOn: dependsOnList,
@@ -308,9 +315,9 @@ Instructions:
             }
         }
 
-        // Order steps logically so data retrieval capabilities (e.g. query_labreports_db) run first, and communication capabilities (e.g. send_email) run second
+        // Order steps logically so data retrieval capabilities run first
         var orderedSteps = steps
-            .OrderByDescending(s => s.Action.Contains("query") || s.Action.Contains("analyze") || s.AgentId.Contains("data"))
+            .OrderByDescending(s => s.AgentId.Contains("data") || (s.Action != null && (s.Action.Contains("query") || s.Action.Contains("analyze"))))
             .ToList();
 
         var finalSteps = new List<TaskStep>();

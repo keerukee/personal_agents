@@ -2,9 +2,10 @@ using CentralOrchestrator.Data;
 using CentralOrchestrator.Services;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using CentralOrchestrator.Services.AI;
 using MySqlDataAgent;
+using Microsoft.Extensions.DependencyInjection;
 
 var host = Host.CreateDefaultBuilder(args)
     .ConfigureServices((hostContext, services) =>
@@ -23,6 +24,13 @@ var host = Host.CreateDefaultBuilder(args)
                 options.UseSqlServer(connectionString);
             }
         });
+
+        // Register LLM Providers for Agent-Local AI
+        services.AddHttpClient<GoogleGeminiLlmProvider>();
+        services.AddHttpClient<AzureAiFoundryLlmProvider>();
+        services.AddHttpClient<GoogleDocumentAiProvider>();
+        services.AddHttpClient<AzureDocumentIntelligenceProvider>();
+        services.AddSingleton<IAiProviderFactory, AiProviderFactory>();
 
         services.AddScoped<IDatabaseQueueService, DatabaseQueueService>();
         services.AddHostedService<MySqlQueueWorker>();

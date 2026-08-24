@@ -141,35 +141,23 @@ public class AgentRegistryService : IAgentRegistryService
             new(
                 "mysql-data-agent",
                 "MySqlDataAgent",
-                "Connects to local MySQL labreports database (localhost:3306) to query patient records, medical reports, and lab results.",
+                "Autonomous data agent connected to MySQL databases: labreports (patient lab test results, AI diagnostics) and patients_info (patient demographics, hospital info). Can answer any question about patients, lab reports, medical records.",
                 "DatabaseQueue://mysql-data-agent",
                 "DatabaseQueue",
                 new List<AgentCapabilityDto>
                 {
-                    new("query_labreports_db", "Queries MySQL labreports database (localhost:3306) to fetch patient information, lab test results, and medical records.", "{\"type\": \"object\", \"properties\": {\"patientCount\": {\"type\": \"integer\", \"default\": 5}}}")
-                }
-            ),
-            new(
-                "sql-data-agent",
-                "SqlDataAgent",
-                "Specialized in executing SQL queries against relational databases and formatting results.",
-                "DatabaseQueue://sql-data-agent",
-                "DatabaseQueue",
-                new List<AgentCapabilityDto>
-                {
-                    new("query_database", "Executes a SQL query against the database and returns tabular results.", "{\"type\": \"object\", \"properties\": {\"sql\": {\"type\": \"string\"}}}")
+                    new("execute_task", "Executes natural language tasks regarding patient data and lab reports.", "{\"type\": \"object\", \"properties\": {\"task\": {\"type\": \"string\"}}}")
                 }
             ),
             new(
                 "outlook-email-agent",
                 "OutlookEmailAgent",
-                "Handles Outlook desktop email reading, drafting, and sending via local Windows MAPI.",
+                "Handles sending and replying to emails via local Outlook desktop. Can format and deliver reports, notifications, and responses.",
                 "DatabaseQueue://outlook-email-agent",
                 "DatabaseQueue",
                 new List<AgentCapabilityDto>
                 {
-                    new("send_email", "Sends an email via desktop Outlook MAPI profile with formatted HTML body and attachments.", "{\"type\": \"object\", \"properties\": {\"to\": {\"type\": \"string\"}, \"subject\": {\"type\": \"string\"}, \"htmlBody\": {\"type\": \"string\"}}}"),
-                    new("send_reply", "Replies to an email thread using local Outlook desktop profile.", "{\"type\":\"object\",\"properties\":{\"targetEntryId\":{\"type\":\"string\"},\"htmlBody\":{\"type\":\"string\"}}}")
+                    new("execute_task", "Executes natural language tasks regarding sending or replying to emails.", "{\"type\": \"object\", \"properties\": {\"task\": {\"type\": \"string\"}}}")
                 }
             ),
             new(
