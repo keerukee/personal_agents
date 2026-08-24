@@ -168,7 +168,8 @@ public class AgentRegistryService : IAgentRegistryService
                 "DatabaseQueue",
                 new List<AgentCapabilityDto>
                 {
-                    new("send_email", "Sends or replies to an email via desktop Outlook MAPI namespace.", "{\"type\": \"object\", \"properties\": {\"to\": {\"type\": \"string\"}, \"subject\": {\"type\": \"string\"}, \"htmlBody\": {\"type\": \"string\"}}}")
+                    new("send_email", "Sends an email via desktop Outlook MAPI profile with formatted HTML body and attachments.", "{\"type\": \"object\", \"properties\": {\"to\": {\"type\": \"string\"}, \"subject\": {\"type\": \"string\"}, \"htmlBody\": {\"type\": \"string\"}}}"),
+                    new("send_reply", "Replies to an email thread using local Outlook desktop profile.", "{\"type\":\"object\",\"properties\":{\"targetEntryId\":{\"type\":\"string\"},\"htmlBody\":{\"type\":\"string\"}}}")
                 }
             ),
             new(
@@ -180,17 +181,6 @@ public class AgentRegistryService : IAgentRegistryService
                 new List<AgentCapabilityDto>
                 {
                     new("analyze_document", "Analyze document attachment from local staging file", "{\"type\":\"object\",\"properties\":{\"filePath\":{\"type\":\"string\"}}}")
-                }
-            ),
-            new(
-                "outlook-email-agent",
-                "OutlookEmailAgent",
-                "Sends emails or replies to email threads via local desktop Outlook COM",
-                "http://localhost:5000/api/email/reply",
-                "PythonFastApi",
-                new List<AgentCapabilityDto>
-                {
-                    new("send_reply", "Send or reply to an email using local MAPI desktop profile", "{\"type\":\"object\",\"properties\":{\"targetEntryId\":{\"type\":\"string\"},\"htmlBody\":{\"type\":\"string\"}}}")
                 }
             )
         };

@@ -114,14 +114,17 @@ public class TaskPlannerService : ITaskPlanner
         ILlmProvider llmProvider,
         CancellationToken cancellationToken)
     {
-        var systemPrompt = $@"You are a Central Orchestrator Agent. Your job is to analyze unread emails and determine if they require an automated action or response from our personal multi-agent platform.
+        var systemPrompt = $@"You are a Central Orchestrator Agent. Your job is to analyze unread emails and create an execution plan using our available sub-agents.
 
 Available Sub-Agents Registry:
 {agentContext}
 
 Instructions:
 1. FIRST, evaluate if the email requires an automated response or action. If the email is a promotional ad, newsletter, receipt, marketing, or no-reply notification that does NOT require an action or reply, return an EMPTY JSON array `[]`.
-2. If an automated action or response IS required, select which sub-agents to invoke to fulfill the request.
+2. If the email requests data, reports, or database information (e.g., patient lab reports, medical records, sales queries):
+   - You MUST generate a 2-step DAG execution plan:
+     * STEP 1: Call the database agent (e.g. 'mysql-data-agent' with action 'query_labreports_db' or 'sql-data-agent' with action 'query_database') to fetch the data.
+     * STEP 2: Call the email agent (e.g. 'outlook-email-agent' with action 'send_reply' or 'send_email') with `dependsOn: [1]` to email the extracted report back to the user!
 3. Output ONLY a valid JSON array of step objects:
 [
   {{
